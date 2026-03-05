@@ -1,0 +1,72 @@
+version: '3.9'
+
+services:
+  # ===================== POSTGRESQL =====================
+  postgres:
+    image: postgres:16-alpine
+    container_name: trainings-db
+    environment:
+      POSTGRES_DB: trainingsdb
+      POSTGRES_USER: trainingsuser
+      POSTGRES_PASSWORD: trainingspass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trainingsuser -d trainingsdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ===================== OLLAMA (Self-Hosted LLM) =====================
+  # Startet einen lokalen LLM-Server — kein API-Key nötig!
+  # Beim ersten Start muss das Modell geladen werden (siehe README)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: trainings-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # GPU-Unterstützung (optional, auskommentieren wenn keine GPU):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # ===================== SPRING BOOT BACKEND =====================
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trainings-backend
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: trainingsdb
+      DB_USER: trainingsuser
+      DB_PASS: trainingspass
+      AI_PROVIDER: ollama
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: llama3.2
+      # Falls du OpenAI statt Ollama nutzen willst:
+      # AI_PROVIDER: openai
+      # OPENAI_API_KEY: sk-dein-key-hier
+      # OPENAI_MODEL: gpt-4o-mini
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  ollama_data:
