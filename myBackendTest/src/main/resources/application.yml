@@ -4,6 +4,13 @@ spring:
   profiles:
     active: dev
 
+# ===================== JWT KONFIGURATION =====================
+jwt:
+  # WICHTIG: In Produktion über Umgebungsvariable setzen! (min. 256 Bit / 32 Bytes Base64)
+  secret: ${JWT_SECRET:dGhpcyBpcyBhIHZlcnkgc2VjdXJlIHNlY3JldCBrZXkgZm9yIGp3dCB0b2tlbnMgMTIzNDU2Nzg5MA==}
+  access-token-expiration-ms: 3600000      # 1 Stunde
+  refresh-token-expiration-ms: 604800000   # 7 Tage
+
 ---
 # ===================== DEV PROFILE (H2) =====================
 spring:
@@ -27,6 +34,10 @@ spring:
       hibernate:
         format_sql: true
         dialect: org.hibernate.dialect.H2Dialect
+  # Seed-Daten deaktiviert (User müssen sich jetzt registrieren)
+  sql:
+    init:
+      mode: never
 
 ai:
   provider: ollama
@@ -59,6 +70,9 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
+  sql:
+    init:
+      mode: never
 
 ai:
   provider: ${AI_PROVIDER:ollama}

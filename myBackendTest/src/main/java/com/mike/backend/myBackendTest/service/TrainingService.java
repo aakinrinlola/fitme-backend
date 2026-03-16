@@ -17,12 +17,7 @@ import java.util.stream.Collectors;
  * Zentraler Service: Verarbeitet Trainings-Feedback und orchestriert
  * die regelbasierte Anpassung + KI-Erklärung.
  *
- * Flow:
- * 1. Frontend sendet SessionFeedbackRequest (RPE + optionale Übungsdaten)
- * 2. TrainingSession wird gespeichert
- * 3. RpeAdjustmentService berechnet neue Parameter (regelbasiert)
- * 4. AiService generiert verständliche Erklärung (LLM)
- * 5. SessionFeedbackResponse wird ans Frontend zurückgegeben
+ * Sicherheit: Alle Methoden prüfen, dass der User nur auf seine eigenen Daten zugreift.
  */
 @Service
 @Transactional
@@ -53,9 +48,13 @@ public class TrainingService {
 
     // ===================== TRAININGSPLAN ERSTELLEN =====================
 
-    public TrainingPlan createPlan(CreateTrainingPlanRequest req) {
-        AppUser user = userRepo.findById(req.userId())
-            .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + req.userId()));
+    /**
+     * Erstellt einen Trainingsplan für den authentifizierten User.
+     * Die userId kommt aus dem JWT, nicht aus dem Request.
+     */
+    public TrainingPlan createPlan(Long userId, CreateTrainingPlanRequest req) {
+        AppUser user = userRepo.findById(userId)
+            .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + userId));
 
         TrainingPlan plan = new TrainingPlan(req.planName(), user);
         plan.setDescription(req.description());
@@ -78,10 +77,19 @@ public class TrainingService {
         return planRepo.save(plan);
     }
 
+    /**
+     * Trainingsplan abrufen MIT Ownership-Check.
+     * @throws SecurityException wenn der Plan nicht dem User gehört
+     */
     @Transactional(readOnly = true)
-    public TrainingPlan getPlan(Long planId) {
-        return planRepo.findById(planId)
+    public TrainingPlan getPlanForUser(Long planId, Long userId) {
+        TrainingPlan plan = planRepo.findById(planId)
             .orElseThrow(() -> new ResourceNotFoundException("Trainingsplan nicht gefunden: " + planId));
+
+        if (!plan.getUser().getId().equals(userId)) {
+            throw new SecurityException("Zugriff verweigert: Dieser Trainingsplan gehört dir nicht");
+        }
+        return plan;
     }
 
     @Transactional(readOnly = true)
@@ -92,21 +100,23 @@ public class TrainingService {
     // ===================== FEEDBACK VERARBEITEN (KERNLOGIK) =====================
 
     /**
-     * Hauptmethode: Verarbeitet das Trainings-Feedback eines Benutzers.
-     *
-     * @param userId User-ID
-     * @param request Das Feedback vom Frontend (RPE, Notiz, Übungsdetails)
-     * @return Antwort mit Anpassungen und KI-Erklärung
+     * Verarbeitet Trainings-Feedback.
+     * Prüft dass der Plan dem User gehört.
      */
     public SessionFeedbackResponse processFeedback(Long userId, SessionFeedbackRequest request) {
         log.info("Verarbeite Feedback: User={}, Plan={}, Session-RPE={}",
             userId, request.trainingPlanId(), request.sessionRpe());
 
-        // 1. Entities laden
+        // 1. Entities laden + Ownership prüfen
         AppUser user = userRepo.findById(userId)
             .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + userId));
         TrainingPlan plan = planRepo.findById(request.trainingPlanId())
             .orElseThrow(() -> new ResourceNotFoundException("Plan nicht gefunden: " + request.trainingPlanId()));
+
+        // Sicherheitscheck: Plan gehört dem User?
+        if (!plan.getUser().getId().equals(userId)) {
+            throw new SecurityException("Zugriff verweigert: Dieser Trainingsplan gehört dir nicht");
+        }
 
         // 2. TrainingSession speichern
         TrainingSession session = new TrainingSession();
@@ -127,7 +137,6 @@ public class TrainingService {
                 if (ef.weightUsed() != null) se.setWeightUsed(ef.weightUsed());
                 se.setNote(ef.note());
 
-                // Verknüpfe mit geplanter Übung
                 exerciseRepo.findById(ef.plannedExerciseId()).ifPresent(pe -> {
                     se.setPlannedExercise(pe);
                     se.setExerciseName(pe.getExerciseName());
@@ -149,7 +158,6 @@ public class TrainingService {
         List<ExerciseAdjustment> adjustments = rpeService.calculateAdjustments(
             exercises, request.sessionRpe(), exerciseRpeMap);
 
-        // Angepasste Übungen speichern
         exerciseRepo.saveAll(exercises);
 
         // 4. KI-Erklärung generieren
@@ -183,10 +191,5 @@ public class TrainingService {
     @Transactional(readOnly = true)
     public List<TrainingSession> getSessionHistory(Long userId) {
         return sessionRepo.findByUserIdOrderBySessionDateDesc(userId);
-    }
-
-    @Transactional(readOnly = true)
-    public List<TrainingSession> getPlanSessions(Long planId) {
-        return sessionRepo.findByTrainingPlanIdOrderBySessionDateDesc(planId);
     }
 }
