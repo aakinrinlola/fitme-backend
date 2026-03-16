@@ -15,10 +15,21 @@ public class AppUser {
     private Long id;
 
     @NotBlank
+    @Column(unique = true, nullable = false)
     private String username;
 
     @Email
+    @Column(unique = true, nullable = false)
     private String email;
+
+    /** BCrypt-gehashtes Passwort */
+    @Column(nullable = false)
+    private String password;
+
+    /** Rolle: USER oder ADMIN */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private Role role = Role.USER;
 
     private Integer age;
 
@@ -34,16 +45,23 @@ public class AppUser {
 
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    private boolean enabled = true;
+
     public enum FitnessLevel {
         BEGINNER, INTERMEDIATE, ADVANCED
+    }
+
+    public enum Role {
+        USER, ADMIN
     }
 
     // ---- Constructors ----
     public AppUser() {}
 
-    public AppUser(String username, String email) {
+    public AppUser(String username, String email, String password) {
         this.username = username;
         this.email = email;
+        this.password = password;
     }
 
     // ---- Getters & Setters ----
@@ -55,6 +73,12 @@ public class AppUser {
 
     public String getEmail() { return email; }
     public void setEmail(String email) { this.email = email; }
+
+    public String getPassword() { return password; }
+    public void setPassword(String password) { this.password = password; }
+
+    public Role getRole() { return role; }
+    public void setRole(Role role) { this.role = role; }
 
     public Integer getAge() { return age; }
     public void setAge(Integer age) { this.age = age; }
@@ -73,4 +97,7 @@ public class AppUser {
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+
+    public boolean isEnabled() { return enabled; }
+    public void setEnabled(boolean enabled) { this.enabled = enabled; }
 }
