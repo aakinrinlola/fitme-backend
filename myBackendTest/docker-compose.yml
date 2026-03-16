@@ -1,27 +1,26 @@
 version: '3.9'
 
 services:
-  # ===================== POSTGRESQL =====================
+
+  # ===================== POSTGRES =====================
   postgres:
     image: postgres:16-alpine
     container_name: trainings-db
     environment:
-      POSTGRES_DB: trainingsdb
-      POSTGRES_USER: trainingsuser
-      POSTGRES_PASSWORD: trainingspass
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U trainingsuser -d trainingsdb"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # ===================== OLLAMA (Self-Hosted LLM) =====================
-  # Startet einen lokalen LLM-Server — kein API-Key nötig!
-  # Beim ersten Start muss das Modell geladen werden (siehe README)
+  # ===================== OLLAMA =====================
   ollama:
     image: ollama/ollama:latest
     container_name: trainings-ollama
@@ -29,16 +28,8 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-    # GPU-Unterstützung (optional, auskommentieren wenn keine GPU):
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
 
-  # ===================== SPRING BOOT BACKEND =====================
+  # ===================== BACKEND =====================
   backend:
     build:
       context: .
@@ -48,23 +39,27 @@ services:
       - "8080:8080"
     environment:
       SPRING_PROFILES_ACTIVE: docker
+
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_NAME: trainingsdb
-      DB_USER: trainingsuser
-      DB_PASS: trainingspass
-      AI_PROVIDER: ollama
-      OLLAMA_URL: http://ollama:11434
-      OLLAMA_MODEL: llama3.2
-      # Falls du OpenAI statt Ollama nutzen willst:
-      # AI_PROVIDER: openai
-      # OPENAI_API_KEY: sk-dein-key-hier
-      # OPENAI_MODEL: gpt-4o-mini
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASS: ${POSTGRES_PASSWORD}
+
+      AI_PROVIDER: ${AI_PROVIDER}
+
+      OLLAMA_URL: ${OLLAMA_URL}
+      OLLAMA_MODEL: ${OLLAMA_MODEL}
+
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL}
+
     depends_on:
       postgres:
         condition: service_healthy
       ollama:
         condition: service_started
+
     restart: unless-stopped
 
 volumes:

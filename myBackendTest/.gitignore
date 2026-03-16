@@ -28,3 +28,7 @@ Thumbs.db
 
 ### Env ###
 .env
+.env
+.env.*
+*.log
+node_modules/
