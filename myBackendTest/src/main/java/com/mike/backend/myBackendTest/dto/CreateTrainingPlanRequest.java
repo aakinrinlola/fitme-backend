@@ -4,7 +4,6 @@ import jakarta.validation.constraints.*;
 import java.util.List;
 
 public record CreateTrainingPlanRequest(
-    @NotNull Long userId,
     @NotBlank String planName,
     String description,
     @NotEmpty List<ExerciseInput> exercises
