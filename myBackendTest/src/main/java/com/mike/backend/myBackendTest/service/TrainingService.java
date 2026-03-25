@@ -11,11 +11,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * Zentraler Service: Verarbeitet Trainings-Feedback und orchestriert
  * die regelbasierte Anpassung + KI-Erklärung.
+ *
+ * Neu: generateAndCreatePlan() — lässt die KI einen Plan generieren und speichert ihn direkt.
  *
  * Sicherheit: Alle Methoden prüfen, dass der User nur auf seine eigenen Daten zugreift.
  */
@@ -46,7 +47,7 @@ public class TrainingService {
         this.aiService = aiService;
     }
 
-    // ===================== TRAININGSPLAN ERSTELLEN =====================
+    // ===================== TRAININGSPLAN MANUELL ERSTELLEN =====================
 
     /**
      * Erstellt einen Trainingsplan für den authentifizierten User.
@@ -54,28 +55,109 @@ public class TrainingService {
      */
     public TrainingPlan createPlan(Long userId, CreateTrainingPlanRequest req) {
         AppUser user = userRepo.findById(userId)
-            .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + userId));
+                .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + userId));
 
         TrainingPlan plan = new TrainingPlan(req.planName(), user);
         plan.setDescription(req.description());
 
         int order = 0;
         for (var exInput : req.exercises()) {
-            PlannedExercise exercise = new PlannedExercise(
-                exInput.exerciseName(),
-                exInput.sets(),
-                exInput.reps(),
-                exInput.weightKg()
-            );
-            exercise.setRestSeconds(exInput.restSeconds());
-            exercise.setTargetRpe(exInput.targetRpe());
-            exercise.setExerciseOrder(order++);
-            exercise.setTrainingPlan(plan);
+            PlannedExercise exercise = buildExercise(exInput, plan, order++);
             plan.getExercises().add(exercise);
         }
 
         return planRepo.save(plan);
     }
+
+    // ===================== TRAININGSPLAN PER KI GENERIEREN (NEU) =====================
+
+    /**
+     * Lässt die KI einen Trainingsplan generieren und speichert ihn direkt.
+     *
+     * Ablauf:
+     * 1. User-Profil laden
+     * 2. KI-Prompt mit Profil + Nutzerwunsch aufbauen
+     * 3. KI generiert Übungen als JSON
+     * 4. Plan wird gespeichert und zurückgegeben
+     *
+     * Bei KI-Fehler: Sinnvoller Fallback-Plan (kein Fehler für den User).
+     *
+     * @param userId  Aus JWT extrahierte User-ID
+     * @param req     Generierungs-Request (Planname, Prompt, optionale Parameter)
+     * @return        Gespeicherter TrainingPlan mit KI-generierten Übungen
+     */
+    public TrainingPlan generateAndCreatePlan(Long userId, GeneratePlanRequest req) {
+        log.info("KI-Plan-Generierung gestartet: User={}, Planname='{}'", userId, req.planName());
+
+        AppUser user = userRepo.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + userId));
+
+        // KI generiert den Plan (gibt GeneratedPlan zurück, nicht List)
+        AiService.GeneratedPlan generated = aiService.generateTrainingPlan(user, req);
+
+        if (generated.exercises().isEmpty()) {
+            throw new IllegalStateException(
+                    "KI konnte keinen Plan erstellen. Bitte beschreibe dein Training genauer.");
+        }
+
+// Plan aufbauen — planName kommt aus dem Request (vom User eingegeben)
+        TrainingPlan plan = new TrainingPlan(req.planName(), user);
+        String description = buildPlanDescription(req);
+        plan.setDescription(description);
+
+        int order = 0;
+        for (var genEx : generated.exercises()) {
+            // GeneratedExercise → ExerciseInput konvertieren
+            var exInput = new CreateTrainingPlanRequest.ExerciseInput(
+                    genEx.exerciseName(),
+                    genEx.sets(),
+                    genEx.reps(),
+                    genEx.weightKg(),
+                    genEx.restSeconds(),
+                    genEx.targetRpe()
+            );
+            PlannedExercise exercise = buildExercise(exInput, plan, order++);
+            plan.getExercises().add(exercise);
+        }
+
+        TrainingPlan saved = planRepo.save(plan);
+        log.info("KI-Plan gespeichert: planId={}, {} Übungen", saved.getId(), saved.getExercises().size());
+
+        return saved;
+    }
+
+    /**
+     * Baut die Plan-Beschreibung aus dem GeneratePlanRequest.
+     */
+    private String buildPlanDescription(GeneratePlanRequest req) {
+        StringBuilder desc = new StringBuilder();
+        desc.append("🤖 KI-generiert: ").append(req.userPrompt());
+
+        if (req.fitnessGoal() != null && !req.fitnessGoal().isBlank()) {
+            desc.append(" | Ziel: ").append(translateGoal(req.fitnessGoal()));
+        }
+        if (req.daysPerWeek() != null) {
+            desc.append(" | ").append(req.daysPerWeek()).append("x/Woche");
+        }
+        if (req.focusMuscles() != null && !req.focusMuscles().isBlank()) {
+            desc.append(" | Fokus: ").append(req.focusMuscles());
+        }
+
+        return desc.toString();
+    }
+
+    private String translateGoal(String goal) {
+        return switch (goal.toUpperCase()) {
+            case "MUSCLE_GAIN"     -> "Muskelaufbau";
+            case "FAT_LOSS"        -> "Fettabbau";
+            case "STRENGTH"        -> "Kraftaufbau";
+            case "ENDURANCE"       -> "Ausdauer";
+            case "GENERAL_FITNESS" -> "Allgemeine Fitness";
+            default -> goal;
+        };
+    }
+
+    // ===================== PLAN ABFRAGEN =====================
 
     /**
      * Trainingsplan abrufen MIT Ownership-Check.
@@ -84,7 +166,7 @@ public class TrainingService {
     @Transactional(readOnly = true)
     public TrainingPlan getPlanForUser(Long planId, Long userId) {
         TrainingPlan plan = planRepo.findById(planId)
-            .orElseThrow(() -> new ResourceNotFoundException("Trainingsplan nicht gefunden: " + planId));
+                .orElseThrow(() -> new ResourceNotFoundException("Trainingsplan nicht gefunden: " + planId));
 
         if (!plan.getUser().getId().equals(userId)) {
             throw new SecurityException("Zugriff verweigert: Dieser Trainingsplan gehört dir nicht");
@@ -105,15 +187,14 @@ public class TrainingService {
      */
     public SessionFeedbackResponse processFeedback(Long userId, SessionFeedbackRequest request) {
         log.info("Verarbeite Feedback: User={}, Plan={}, Session-RPE={}",
-            userId, request.trainingPlanId(), request.sessionRpe());
+                userId, request.trainingPlanId(), request.sessionRpe());
 
         // 1. Entities laden + Ownership prüfen
         AppUser user = userRepo.findById(userId)
-            .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + userId));
+                .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + userId));
         TrainingPlan plan = planRepo.findById(request.trainingPlanId())
-            .orElseThrow(() -> new ResourceNotFoundException("Plan nicht gefunden: " + request.trainingPlanId()));
+                .orElseThrow(() -> new ResourceNotFoundException("Plan nicht gefunden: " + request.trainingPlanId()));
 
-        // Sicherheitscheck: Plan gehört dem User?
         if (!plan.getUser().getId().equals(userId)) {
             throw new SecurityException("Zugriff verweigert: Dieser Trainingsplan gehört dir nicht");
         }
@@ -126,7 +207,6 @@ public class TrainingService {
         session.setUserNote(request.userNote());
         session.setCompleted(true);
 
-        // Übungsdaten speichern (wenn vorhanden)
         if (request.exerciseFeedbacks() != null) {
             for (var ef : request.exerciseFeedbacks()) {
                 SessionExercise se = new SessionExercise();
@@ -156,13 +236,13 @@ public class TrainingService {
 
         List<PlannedExercise> exercises = plan.getExercises();
         List<ExerciseAdjustment> adjustments = rpeService.calculateAdjustments(
-            exercises, request.sessionRpe(), exerciseRpeMap);
+                exercises, request.sessionRpe(), exerciseRpeMap);
 
         exerciseRepo.saveAll(exercises);
 
         // 4. KI-Erklärung generieren
         String aiExplanation = aiService.generateExplanation(
-            user, request.sessionRpe(), request.userNote(), adjustments);
+                user, request.sessionRpe(), request.userNote(), adjustments);
 
         // 5. Session mit KI-Antwort speichern
         session.setAiResponse(aiExplanation);
@@ -172,17 +252,17 @@ public class TrainingService {
         long totalPlanned = sessionRepo.countByTrainingPlanId(plan.getId());
         long totalCompleted = sessionRepo.countByTrainingPlanIdAndCompletedTrue(plan.getId());
         double adherencePercent = totalPlanned > 0
-            ? (double) totalCompleted / totalPlanned * 100.0 : 0.0;
+                ? (double) totalCompleted / totalPlanned * 100.0 : 0.0;
 
         log.info("Feedback verarbeitet: Session={}, {} Anpassungen, Adhärenz={}%",
-            session.getId(), adjustments.size(), String.format("%.1f", adherencePercent));
+                session.getId(), adjustments.size(), String.format("%.1f", adherencePercent));
 
         return new SessionFeedbackResponse(
-            session.getId(),
-            request.sessionRpe(),
-            aiExplanation,
-            adjustments,
-            new AdherenceStats(totalPlanned, totalCompleted, adherencePercent)
+                session.getId(),
+                request.sessionRpe(),
+                aiExplanation,
+                adjustments,
+                new AdherenceStats(totalPlanned, totalCompleted, adherencePercent)
         );
     }
 
@@ -191,5 +271,23 @@ public class TrainingService {
     @Transactional(readOnly = true)
     public List<TrainingSession> getSessionHistory(Long userId) {
         return sessionRepo.findByUserIdOrderBySessionDateDesc(userId);
+    }
+
+    // ===================== HILFSMETHODEN =====================
+
+    /** Baut eine PlannedExercise-Entity aus dem Input-DTO. */
+    private PlannedExercise buildExercise(CreateTrainingPlanRequest.ExerciseInput input,
+                                          TrainingPlan plan, int order) {
+        PlannedExercise exercise = new PlannedExercise(
+                input.exerciseName(),
+                input.sets(),
+                input.reps(),
+                input.weightKg()
+        );
+        exercise.setRestSeconds(input.restSeconds());
+        exercise.setTargetRpe(input.targetRpe());
+        exercise.setExerciseOrder(order);
+        exercise.setTrainingPlan(plan);
+        return exercise;
     }
 }
