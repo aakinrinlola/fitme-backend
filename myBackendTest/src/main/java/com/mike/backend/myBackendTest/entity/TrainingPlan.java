@@ -31,9 +31,26 @@ public class TrainingPlan {
     @OrderBy("sessionDate DESC")
     private List<TrainingSession> sessions = new ArrayList<>();
 
+    /** Manuell gesetzter Aktiv-Status (kann auch durch Ablauf überschrieben werden) */
     private boolean active = true;
 
+    /** Erstellungszeitpunkt — wird nie verändert */
     private LocalDateTime createdAt = LocalDateTime.now();
+
+    /**
+     * Zeitpunkt der letzten manuellen Aktivierung.
+     * Wird gesetzt bei: Erstellung + jeder manuellen Reaktivierung.
+     */
+    @Column(name = "last_activated_at")
+    private LocalDateTime lastActivatedAt;
+
+    /**
+     * Plan ist aktiv bis zu diesem Zeitpunkt.
+     * Berechnung: lastActivatedAt + 1 Monat
+     * Wird gesetzt bei: Erstellung + jeder manuellen Reaktivierung.
+     */
+    @Column(name = "active_until")
+    private LocalDateTime activeUntil;
 
     // ---- Constructors ----
     public TrainingPlan() {}
@@ -41,6 +58,10 @@ public class TrainingPlan {
     public TrainingPlan(String planName, AppUser user) {
         this.planName = planName;
         this.user = user;
+        // Beim Erstellen: sofort aktivieren für 1 Monat
+        this.active = true;
+        this.lastActivatedAt = LocalDateTime.now();
+        this.activeUntil = this.lastActivatedAt.plusMonths(1);
     }
 
     // ---- Getters & Setters ----
@@ -67,4 +88,20 @@ public class TrainingPlan {
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+
+    public LocalDateTime getLastActivatedAt() { return lastActivatedAt; }
+    public void setLastActivatedAt(LocalDateTime lastActivatedAt) { this.lastActivatedAt = lastActivatedAt; }
+
+    public LocalDateTime getActiveUntil() { return activeUntil; }
+    public void setActiveUntil(LocalDateTime activeUntil) { this.activeUntil = activeUntil; }
+
+    /**
+     * Prüft ob der Plan aktuell wirklich aktiv ist (berücksichtigt Ablaufdatum).
+     * Nutze diese Methode für Geschäftslogik statt isActive() direkt.
+     */
+    public boolean isCurrentlyActive() {
+        if (!active) return false;
+        if (activeUntil == null) return true; // Kein Ablaufdatum → bleibt aktiv (Rückwärtskompatibilität)
+        return LocalDateTime.now().isBefore(activeUntil);
+    }
 }

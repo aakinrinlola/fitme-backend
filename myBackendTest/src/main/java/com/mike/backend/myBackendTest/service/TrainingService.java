@@ -10,14 +10,16 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.*;
 
 /**
- * Zentraler Service für Trainingsplan-Verwaltung und Feedback-Verarbeitung.
+ * Zentraler Service für Trainingsplan-Verwaltung und Feedback.
  *
- * NEU: generateAndCreatePlan() iteriert über AiService.GeneratedDay-Objekte
- * und setzt das Feld trainingDay auf jeder PlannedExercise, damit das
- * Frontend die Übungen nach Tag gruppieren kann.
+ * NEU:
+ * - setActiveStatus() — manuelles Aktivieren/Deaktivieren mit 1-Monats-Logik
+ * - checkAndApplyExpiry() — lazy Ablaufprüfung beim Laden
+ * - activeUntil wird bei Erstellung gesetzt (now + 1 Monat)
  */
 @Service
 @Transactional
@@ -52,25 +54,19 @@ public class TrainingService {
         AppUser user = userRepo.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + userId));
 
+        // TrainingPlan-Konstruktor setzt activeUntil = now + 1 Monat
         TrainingPlan plan = new TrainingPlan(req.planName(), user);
         plan.setDescription(req.description());
 
         int order = 0;
         for (var exInput : req.exercises()) {
-            PlannedExercise exercise = buildExercise(exInput, plan, order++, null);
-            plan.getExercises().add(exercise);
+            plan.getExercises().add(buildExercise(exInput, plan, order++, null));
         }
         return planRepo.save(plan);
     }
 
-    // ===================== KI-GENERIERUNG (MEHRTÄGIG) =====================
+    // ===================== KI-GENERIERUNG =====================
 
-    /**
-     * Lässt die KI einen mehrtägigen Trainingsplan generieren und speichert ihn.
-     *
-     * Jede Übung bekommt das Feld trainingDay (z.B. "Tag A", "Tag B"), sodass
-     * das Frontend die Übungen nach Tag gruppieren und anzeigen kann.
-     */
     public TrainingPlan generateAndCreatePlan(Long userId, GeneratePlanRequest req) {
         log.info("KI-Plan-Generierung: User={}, Plan='{}'", userId, req.planName());
 
@@ -78,11 +74,11 @@ public class TrainingService {
                 .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + userId));
 
         AiService.GeneratedPlan generated = aiService.generateTrainingPlan(user, req);
-
         if (generated.days().isEmpty()) {
-            throw new IllegalStateException("KI konnte keinen Plan erstellen. Bitte Beschreibung präzisieren.");
+            throw new IllegalStateException("KI konnte keinen Plan erstellen.");
         }
 
+        // TrainingPlan-Konstruktor setzt activeUntil = now + 1 Monat
         TrainingPlan plan = new TrainingPlan(req.planName(), user);
         plan.setDescription(buildPlanDescription(req, generated));
 
@@ -93,62 +89,51 @@ public class TrainingService {
                         genEx.exerciseName(), genEx.sets(), genEx.reps(),
                         genEx.weightKg(), genEx.restSeconds(), genEx.targetRpe()
                 );
-                // trainingDay wird gesetzt, damit das Frontend nach Tag gruppieren kann
-                PlannedExercise exercise = buildExercise(exInput, plan, globalOrder++, day.dayName());
-                plan.getExercises().add(exercise);
+                plan.getExercises().add(buildExercise(exInput, plan, globalOrder++, day.dayName()));
             }
         }
 
         TrainingPlan saved = planRepo.save(plan);
-        log.info("KI-Plan gespeichert: planId={}, {} Tage, {} Übungen gesamt",
-                saved.getId(), generated.days().size(), saved.getExercises().size());
+        log.info("KI-Plan gespeichert: planId={}, activeUntil={}", saved.getId(), saved.getActiveUntil());
         return saved;
     }
 
+    // ===================== STATUS ÄNDERN (NEU) =====================
+
     /**
-     * Baut eine Plan-Beschreibung die auch die Tage-Struktur widerspiegelt.
+     * Ändert den Aktiv-Status eines Plans manuell.
+     *
+     * Bei Aktivierung:
+     *   - active = true
+     *   - lastActivatedAt = jetzt
+     *   - activeUntil = jetzt + 1 Monat  ← neuer Zeitraum startet
+     *
+     * Bei Deaktivierung:
+     *   - active = false
+     *   - activeUntil und lastActivatedAt bleiben unverändert
      */
-    private String buildPlanDescription(GeneratePlanRequest req, AiService.GeneratedPlan generated) {
-        StringBuilder desc = new StringBuilder();
-        desc.append("🤖 KI-generiert: ").append(req.userPrompt());
+    public TrainingPlan setActiveStatus(Long planId, Long userId, boolean active) {
+        TrainingPlan plan = getPlanForUser(planId, userId);
 
-        if (req.fitnessGoal() != null && !req.fitnessGoal().isBlank()) {
-            desc.append(" | Ziel: ").append(translateGoal(req.fitnessGoal()));
-        }
-        if (req.daysPerWeek() != null) {
-            desc.append(" | ").append(req.daysPerWeek()).append("x/Woche");
-        }
-
-        int numDays    = generated.days().size();
-        int daysPerWeek = req.daysPerWeek() != null ? req.daysPerWeek() : 3;
-
-        // Tage-Struktur + Rotationshinweis
-        if (numDays > 0) {
-            List<String> dayNames = generated.days().stream().map(AiService.GeneratedDay::dayName).toList();
-            desc.append(" | Tage: ").append(String.join(", ", dayNames));
-
-            // Rotationshinweis nur wenn mehr Trainingstage als Planvarianten
-            if (numDays > 1 && daysPerWeek > numDays) {
-                desc.append(" | Rotation: ");
-                for (int i = 0; i < daysPerWeek; i++) {
-                    if (i > 0) desc.append(" → ");
-                    desc.append(dayNames.get(i % numDays));
-                }
-            }
+        if (active) {
+            plan.setActive(true);
+            plan.setLastActivatedAt(LocalDateTime.now());
+            plan.setActiveUntil(LocalDateTime.now().plusMonths(1));
+            log.info("Plan {} aktiviert. Aktiv bis: {}", planId, plan.getActiveUntil());
+        } else {
+            plan.setActive(false);
+            log.info("Plan {} manuell deaktiviert.", planId);
         }
 
-        return desc.toString();
+        return planRepo.save(plan);
     }
 
-    private String translateGoal(String goal) {
-        return switch (goal.toUpperCase()) {
-            case "MUSCLE_GAIN"     -> "Muskelaufbau";
-            case "FAT_LOSS"        -> "Fettabbau";
-            case "STRENGTH"        -> "Kraftaufbau";
-            case "ENDURANCE"       -> "Ausdauer";
-            case "GENERAL_FITNESS" -> "Allgemeine Fitness";
-            default                -> goal;
-        };
+    // ===================== PLAN LÖSCHEN =====================
+
+    public void deletePlan(Long planId, Long userId) {
+        TrainingPlan plan = getPlanForUser(planId, userId);
+        planRepo.delete(plan);
+        log.info("Plan gelöscht: planId={}, userId={}", planId, userId);
     }
 
     // ===================== PLAN ABFRAGEN =====================
@@ -163,16 +148,34 @@ public class TrainingService {
         return plan;
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * Gibt alle aktiven Pläne des Users zurück.
+     * Prüft dabei lazy, ob Pläne abgelaufen sind, und deaktiviert sie ggf.
+     */
     public List<TrainingPlan> getUserPlans(Long userId) {
-        return planRepo.findByUserIdAndActiveTrue(userId);
+        List<TrainingPlan> plans = planRepo.findByUserId(userId);
+        plans.forEach(this::checkAndApplyExpiry);
+        return plans;
+    }
+
+    /**
+     * Lazy Ablaufprüfung: Falls ein Plan aktiv ist, aber activeUntil in der Vergangenheit liegt,
+     * wird er automatisch als inaktiv markiert und gespeichert.
+     */
+    private void checkAndApplyExpiry(TrainingPlan plan) {
+        if (plan.isActive()
+                && plan.getActiveUntil() != null
+                && LocalDateTime.now().isAfter(plan.getActiveUntil())) {
+            plan.setActive(false);
+            planRepo.save(plan);
+            log.info("Plan {} automatisch deaktiviert (activeUntil: {} liegt in der Vergangenheit)",
+                    plan.getId(), plan.getActiveUntil());
+        }
     }
 
     // ===================== FEEDBACK VERARBEITEN =====================
 
     public SessionFeedbackResponse processFeedback(Long userId, SessionFeedbackRequest request) {
-        log.info("Feedback: User={}, Plan={}, RPE={}", userId, request.trainingPlanId(), request.sessionRpe());
-
         AppUser user = userRepo.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + userId));
         TrainingPlan plan = planRepo.findById(request.trainingPlanId())
@@ -208,27 +211,23 @@ public class TrainingService {
 
         Map<Long, Integer> rpeMap = new HashMap<>();
         if (request.exerciseFeedbacks() != null) {
-            for (var ef : request.exerciseFeedbacks())
-                rpeMap.put(ef.plannedExerciseId(), ef.exerciseRpe());
+            request.exerciseFeedbacks().forEach(ef -> rpeMap.put(ef.plannedExerciseId(), ef.exerciseRpe()));
         }
 
         List<PlannedExercise> exercises = plan.getExercises();
-        List<ExerciseAdjustment> adjustments = rpeService.calculateAdjustments(
-                exercises, request.sessionRpe(), rpeMap);
+        List<ExerciseAdjustment> adjustments = rpeService.calculateAdjustments(exercises, request.sessionRpe(), rpeMap);
         exerciseRepo.saveAll(exercises);
 
-        String aiExplanation = aiService.generateExplanation(
-                user, request.sessionRpe(), request.userNote(), adjustments);
+        String aiExplanation = aiService.generateExplanation(user, request.sessionRpe(), request.userNote(), adjustments);
         session.setAiResponse(aiExplanation);
         session = sessionRepo.save(session);
 
-        long totalPlanned   = sessionRepo.countByTrainingPlanId(plan.getId());
-        long totalCompleted = sessionRepo.countByTrainingPlanIdAndCompletedTrue(plan.getId());
-        double adherence    = totalPlanned > 0 ? (double) totalCompleted / totalPlanned * 100.0 : 0.0;
+        long total     = sessionRepo.countByTrainingPlanId(plan.getId());
+        long completed = sessionRepo.countByTrainingPlanIdAndCompletedTrue(plan.getId());
+        double pct     = total > 0 ? (double) completed / total * 100.0 : 0.0;
 
-        log.info("Feedback verarbeitet: Session={}, {} Anpassungen", session.getId(), adjustments.size());
         return new SessionFeedbackResponse(session.getId(), request.sessionRpe(), aiExplanation,
-                adjustments, new AdherenceStats(totalPlanned, totalCompleted, adherence));
+                adjustments, new AdherenceStats(total, completed, pct));
     }
 
     // ===================== SESSION HISTORY =====================
@@ -240,20 +239,49 @@ public class TrainingService {
 
     // ===================== HILFSMETHODEN =====================
 
-    /**
-     * Baut eine PlannedExercise-Entity.
-     *
-     * @param trainingDay  "Tag A", "Tag B", … oder null für manuelle Pläne
-     */
     private PlannedExercise buildExercise(CreateTrainingPlanRequest.ExerciseInput input,
                                           TrainingPlan plan, int order, String trainingDay) {
-        PlannedExercise exercise = new PlannedExercise(
+        PlannedExercise ex = new PlannedExercise(
                 input.exerciseName(), input.sets(), input.reps(), input.weightKg());
-        exercise.setRestSeconds(input.restSeconds());
-        exercise.setTargetRpe(input.targetRpe());
-        exercise.setExerciseOrder(order);
-        exercise.setTrainingPlan(plan);
-        exercise.setTrainingDay(trainingDay); // null für manuelle Pläne
-        return exercise;
+        ex.setRestSeconds(input.restSeconds());
+        ex.setTargetRpe(input.targetRpe());
+        ex.setExerciseOrder(order);
+        ex.setTrainingPlan(plan);
+        ex.setTrainingDay(trainingDay);
+        return ex;
+    }
+
+    private String buildPlanDescription(GeneratePlanRequest req, AiService.GeneratedPlan generated) {
+        StringBuilder desc = new StringBuilder("🤖 KI-generiert: ").append(req.userPrompt());
+        if (req.fitnessGoal() != null && !req.fitnessGoal().isBlank())
+            desc.append(" | Ziel: ").append(translateGoal(req.fitnessGoal()));
+        if (req.daysPerWeek() != null)
+            desc.append(" | ").append(req.daysPerWeek()).append("x/Woche");
+
+        int numDays = generated.days().size();
+        int dpw     = req.daysPerWeek() != null ? req.daysPerWeek() : 3;
+        if (numDays > 0) {
+            List<String> names = generated.days().stream().map(AiService.GeneratedDay::dayName).toList();
+            desc.append(" | Tage: ").append(String.join(", ", names));
+            if (numDays > 1 && dpw > numDays) {
+                desc.append(" | Rotation: ");
+                for (int i = 0; i < dpw; i++) {
+                    if (i > 0) desc.append(" → ");
+                    desc.append(names.get(i % numDays));
+                }
+            }
+        }
+        return desc.toString();
+    }
+
+    private String translateGoal(String goal) {
+        return switch (goal.toUpperCase()) {
+            case "MUSCLE_GAIN"     -> "Muskelaufbau";
+            case "FAT_LOSS"        -> "Fettabbau";
+            case "STRENGTH"        -> "Kraftaufbau";
+            case "ENDURANCE"       -> "Ausdauer";
+            case "GENERAL_FITNESS" -> "Allgemeine Fitness";
+            default -> goal;
+        };
     }
 }
