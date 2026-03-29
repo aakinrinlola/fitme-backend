@@ -17,11 +17,11 @@ import java.util.Map;
  * Trainingsplan-Endpoints (geschützt, JWT erforderlich).
  *
  * POST /api/training-plans              → Manuell erstellen
- * POST /api/training-plans/generate    → KI-Trainingsplan generieren und speichern
+ * POST /api/training-plans/generate    → KI-Trainingsplan generieren (mehrtägig)
  * GET  /api/training-plans             → Alle eigenen aktiven Pläne
- * GET  /api/training-plans/{planId}    → Einzelnen Plan abrufen
+ * GET  /api/training-plans/{planId}    → Einzelnen Plan abrufen (mit trainingDay)
  *
- * WICHTIG: /generate muss VOR /{planId} gemappt sein (Spring-Routing-Reihenfolge).
+ * WICHTIG: /generate MUSS vor /{planId} gemappt sein.
  */
 @RestController
 @RequestMapping("/api/training-plans")
@@ -35,17 +35,12 @@ public class TrainingPlanController {
         this.securityHelper  = securityHelper;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
     // POST /api/training-plans
-    // Trainingsplan manuell erstellen.
-    // ─────────────────────────────────────────────────────────────────────────
     @PostMapping
     public ResponseEntity<Map<String, Object>> createPlan(
             @Valid @RequestBody CreateTrainingPlanRequest request) {
-
         Long userId = securityHelper.getCurrentUserId();
         TrainingPlan plan = trainingService.createPlan(userId, request);
-
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of(
                 "id",            plan.getId(),
                 "planName",      plan.getPlanName(),
@@ -54,27 +49,12 @@ public class TrainingPlanController {
         ));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
     // POST /api/training-plans/generate
-    // KI generiert Übungen und speichert den Plan direkt.
-    //
-    // Request-Body (GeneratePlanRequest):
-    //   planName        – vom User eingegebener Planname (Pflicht)
-    //   userPrompt      – Freitext-Wunsch des Users (Pflicht, min 10 Zeichen)
-    //   fitnessGoal     – MUSCLE_GAIN | STRENGTH | FAT_LOSS | ENDURANCE | GENERAL_FITNESS (optional)
-    //   daysPerWeek     – 1–7 (optional)
-    //   focusMuscles    – z.B. "Brust, Schulter, Trizeps" (optional)
-    //   experienceLevel – BEGINNER | INTERMEDIATE | ADVANCED (optional)
-    //
-    // Response: { id, planName, exerciseCount, message }
-    // ─────────────────────────────────────────────────────────────────────────
     @PostMapping("/generate")
     public ResponseEntity<Map<String, Object>> generatePlan(
             @Valid @RequestBody GeneratePlanRequest request) {
-
         Long userId = securityHelper.getCurrentUserId();
         TrainingPlan plan = trainingService.generateAndCreatePlan(userId, request);
-
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of(
                 "id",            plan.getId(),
                 "planName",      plan.getPlanName(),
@@ -83,10 +63,7 @@ public class TrainingPlanController {
         ));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
     // GET /api/training-plans/{planId}
-    // Einzelnen Plan abrufen (mit Ownership-Check).
-    // ─────────────────────────────────────────────────────────────────────────
     @GetMapping("/{planId}")
     public ResponseEntity<Map<String, Object>> getPlan(@PathVariable Long planId) {
         Long userId = securityHelper.getCurrentUserId();
@@ -105,19 +82,17 @@ public class TrainingPlanController {
                         "weightKg",     e.getWeightKg(),
                         "restSeconds",  e.getRestSeconds(),
                         "targetRpe",    e.getTargetRpe() != null ? e.getTargetRpe() : 7,
-                        "order",        e.getExerciseOrder()
+                        "order",        e.getExerciseOrder(),
+                        // NEU: trainingDay — null bei manuell erstellten Plänen
+                        "trainingDay",  e.getTrainingDay() != null ? e.getTrainingDay() : ""
                 )).toList()
         ));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
     // GET /api/training-plans
-    // Alle eigenen aktiven Pläne abrufen.
-    // ─────────────────────────────────────────────────────────────────────────
     @GetMapping
     public ResponseEntity<List<Map<String, Object>>> getMyPlans() {
         Long userId = securityHelper.getCurrentUserId();
-
         return ResponseEntity.ok(
                 trainingService.getUserPlans(userId).stream()
                         .map(plan -> Map.<String, Object>of(

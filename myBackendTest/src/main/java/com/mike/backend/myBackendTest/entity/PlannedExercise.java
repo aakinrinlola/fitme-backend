@@ -27,8 +27,15 @@ public class PlannedExercise {
 
     private int exerciseOrder;
 
-    /** Ziel-RPE für diese Übung (z.B. 7 = "2–3 Wiederholungen in Reserve") */
+    /** Ziel-RPE für diese Übung */
     private Integer targetRpe;
+
+    /**
+     * Trainingstag-Bezeichnung (z.B. "Tag A", "Tag B", "Push", "Pull").
+     * NULL = kein mehrtägiger Plan (alter Datensatz oder manuell erstellt).
+     */
+    @Column(name = "training_day")
+    private String trainingDay;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "training_plan_id", nullable = false)
@@ -68,6 +75,9 @@ public class PlannedExercise {
 
     public Integer getTargetRpe() { return targetRpe; }
     public void setTargetRpe(Integer targetRpe) { this.targetRpe = targetRpe; }
+
+    public String getTrainingDay() { return trainingDay; }
+    public void setTrainingDay(String trainingDay) { this.trainingDay = trainingDay; }
 
     public TrainingPlan getTrainingPlan() { return trainingPlan; }
     public void setTrainingPlan(TrainingPlan trainingPlan) { this.trainingPlan = trainingPlan; }
