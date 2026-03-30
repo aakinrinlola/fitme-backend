@@ -20,18 +20,9 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.List;
 
-/**
- * Spring Security Konfiguration.
- *
- * Prinzipien:
- * - Stateless: Kein Session-Cookie, nur JWT
- * - Public Endpoints: /api/auth/** (Login, Register)
- * - Protected: Alles andere → JWT erforderlich
- * - CORS: Angular Frontend (localhost:4200) erlaubt
- */
 @Configuration
 @EnableWebSecurity
-@EnableMethodSecurity  // Ermöglicht @PreAuthorize in Controllern
+@EnableMethodSecurity
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtFilter;
@@ -43,34 +34,19 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-            // CSRF deaktivieren (JWT-basiert, kein Cookie)
-            .csrf(csrf -> csrf.disable())
-
-            // CORS aktivieren
-            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-
-            // Stateless Session (kein Cookie, kein Session-Store)
-            .sessionManagement(session ->
-                session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-
-            // Endpoint-Regeln
-            .authorizeHttpRequests(auth -> auth
-                // Öffentliche Endpoints
-                .requestMatchers("/api/auth/**").permitAll()
-                .requestMatchers("/h2-console/**").permitAll()
-
-                // Admin-only Endpoints
-                .requestMatchers(HttpMethod.GET, "/api/admin/**").hasRole("ADMIN")
-
-                // Alles andere erfordert Authentifizierung
-                .anyRequest().authenticated()
-            )
-
-            // H2-Console braucht Frames
-            .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()))
-
-            // JWT-Filter VOR dem Standard-Auth-Filter einfügen
-            .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
+                .csrf(csrf -> csrf.disable())
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/auth/**").permitAll()
+                        .requestMatchers("/h2-console/**").permitAll()
+                        // FIX: OPTIONS Preflight-Requests immer erlauben (sonst schlägt PATCH-CORS fehl)
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/admin/**").hasRole("ADMIN")
+                        .anyRequest().authenticated()
+                )
+                .headers(h -> h.frameOptions(f -> f.sameOrigin()))
+                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
@@ -88,11 +64,9 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of(
-            "http://localhost:4200",   // Angular Dev
-            "http://localhost:3000"    // Alternative Frontend
-        ));
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedOrigins(List.of("http://localhost:4200", "http://localhost:3000"));
+        // FIX: PATCH explizit in der Spring-Security-CORS-Config — behebt OPTIONS-Preflight-Fehler
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setExposedHeaders(List.of("Authorization"));
         config.setAllowCredentials(true);

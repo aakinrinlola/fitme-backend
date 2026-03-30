@@ -13,14 +13,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.*;
 
-/**
- * Zentraler Service für Trainingsplan-Verwaltung und Feedback.
- *
- * NEU:
- * - setActiveStatus() — manuelles Aktivieren/Deaktivieren mit 1-Monats-Logik
- * - checkAndApplyExpiry() — lazy Ablaufprüfung beim Laden
- * - activeUntil wird bei Erstellung gesetzt (now + 1 Monat)
- */
 @Service
 @Transactional
 public class TrainingService {
@@ -48,19 +40,19 @@ public class TrainingService {
         this.aiService    = aiService;
     }
 
-    // ===================== MANUELL ERSTELLEN =====================
+    // ===================== PLAN ERSTELLEN =====================
 
     public TrainingPlan createPlan(Long userId, CreateTrainingPlanRequest req) {
         AppUser user = userRepo.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + userId));
 
-        // TrainingPlan-Konstruktor setzt activeUntil = now + 1 Monat
         TrainingPlan plan = new TrainingPlan(req.planName(), user);
         plan.setDescription(req.description());
+        plan.setPlanDurationWeeks(4); // Feste Laufzeit: 4 Wochen
 
         int order = 0;
-        for (var exInput : req.exercises()) {
-            plan.getExercises().add(buildExercise(exInput, plan, order++, null));
+        for (var ex : req.exercises()) {
+            plan.getExercises().add(buildExercise(ex, plan, order++, null));
         }
         return planRepo.save(plan);
     }
@@ -68,7 +60,7 @@ public class TrainingService {
     // ===================== KI-GENERIERUNG =====================
 
     public TrainingPlan generateAndCreatePlan(Long userId, GeneratePlanRequest req) {
-        log.info("KI-Plan-Generierung: User={}, Plan='{}'", userId, req.planName());
+        log.info("KI-Generierung: User={}, Plan='{}'", userId, req.planName());
 
         AppUser user = userRepo.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + userId));
@@ -78,99 +70,66 @@ public class TrainingService {
             throw new IllegalStateException("KI konnte keinen Plan erstellen.");
         }
 
-        // TrainingPlan-Konstruktor setzt activeUntil = now + 1 Monat
         TrainingPlan plan = new TrainingPlan(req.planName(), user);
         plan.setDescription(buildPlanDescription(req, generated));
+        plan.setPlanDurationWeeks(4);
 
-        int globalOrder = 0;
+        int order = 0;
         for (AiService.GeneratedDay day : generated.days()) {
             for (AiService.GeneratedExercise genEx : day.exercises()) {
                 var exInput = new CreateTrainingPlanRequest.ExerciseInput(
                         genEx.exerciseName(), genEx.sets(), genEx.reps(),
-                        genEx.weightKg(), genEx.restSeconds(), genEx.targetRpe()
-                );
-                plan.getExercises().add(buildExercise(exInput, plan, globalOrder++, day.dayName()));
+                        genEx.weightKg(), genEx.restSeconds(), genEx.targetRpe());
+                plan.getExercises().add(buildExercise(exInput, plan, order++, day.dayName()));
             }
         }
 
         TrainingPlan saved = planRepo.save(plan);
-        log.info("KI-Plan gespeichert: planId={}, activeUntil={}", saved.getId(), saved.getActiveUntil());
+        log.info("KI-Plan gespeichert: id={}, activeUntil={}", saved.getId(), saved.getActiveUntil());
         return saved;
     }
 
-    // ===================== STATUS ÄNDERN (NEU) =====================
+    // ===================== FEEDBACK VERFÜGBARKEIT =====================
 
     /**
-     * Ändert den Aktiv-Status eines Plans manuell.
-     *
-     * Bei Aktivierung:
-     *   - active = true
-     *   - lastActivatedAt = jetzt
-     *   - activeUntil = jetzt + 1 Monat  ← neuer Zeitraum startet
-     *
-     * Bei Deaktivierung:
-     *   - active = false
-     *   - activeUntil und lastActivatedAt bleiben unverändert
+     * Prüft, ob der User für diesen Plan in dieser Woche Feedback geben darf.
+     * Gibt eine Map zurück mit:
+     *   - allowed: boolean
+     *   - nextAvailableAt: ISO-String oder null
+     *   - currentWeek: int
+     *   - planDurationWeeks: int
+     *   - isActive: boolean
      */
-    public TrainingPlan setActiveStatus(Long planId, Long userId, boolean active) {
-        TrainingPlan plan = getPlanForUser(planId, userId);
-
-        if (active) {
-            plan.setActive(true);
-            plan.setLastActivatedAt(LocalDateTime.now());
-            plan.setActiveUntil(LocalDateTime.now().plusMonths(1));
-            log.info("Plan {} aktiviert. Aktiv bis: {}", planId, plan.getActiveUntil());
-        } else {
-            plan.setActive(false);
-            log.info("Plan {} manuell deaktiviert.", planId);
-        }
-
-        return planRepo.save(plan);
-    }
-
-    // ===================== PLAN LÖSCHEN =====================
-
-    public void deletePlan(Long planId, Long userId) {
-        TrainingPlan plan = getPlanForUser(planId, userId);
-        planRepo.delete(plan);
-        log.info("Plan gelöscht: planId={}, userId={}", planId, userId);
-    }
-
-    // ===================== PLAN ABFRAGEN =====================
-
     @Transactional(readOnly = true)
-    public TrainingPlan getPlanForUser(Long planId, Long userId) {
-        TrainingPlan plan = planRepo.findById(planId)
-                .orElseThrow(() -> new ResourceNotFoundException("Plan nicht gefunden: " + planId));
-        if (!plan.getUser().getId().equals(userId)) {
-            throw new SecurityException("Zugriff verweigert: Dieser Plan gehört dir nicht");
-        }
-        return plan;
-    }
+    public Map<String, Object> getFeedbackAvailability(Long planId, Long userId) {
+        TrainingPlan plan = getPlanForUser(planId, userId);
 
-    /**
-     * Gibt alle aktiven Pläne des Users zurück.
-     * Prüft dabei lazy, ob Pläne abgelaufen sind, und deaktiviert sie ggf.
-     */
-    public List<TrainingPlan> getUserPlans(Long userId) {
-        List<TrainingPlan> plans = planRepo.findByUserId(userId);
-        plans.forEach(this::checkAndApplyExpiry);
-        return plans;
-    }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("planId",            plan.getId());
+        result.put("isActive",          plan.isCurrentlyActive());
+        result.put("currentWeek",       plan.getCurrentWeek());
+        result.put("planDurationWeeks", plan.getPlanDurationWeeks());
 
-    /**
-     * Lazy Ablaufprüfung: Falls ein Plan aktiv ist, aber activeUntil in der Vergangenheit liegt,
-     * wird er automatisch als inaktiv markiert und gespeichert.
-     */
-    private void checkAndApplyExpiry(TrainingPlan plan) {
-        if (plan.isActive()
-                && plan.getActiveUntil() != null
-                && LocalDateTime.now().isAfter(plan.getActiveUntil())) {
-            plan.setActive(false);
-            planRepo.save(plan);
-            log.info("Plan {} automatisch deaktiviert (activeUntil: {} liegt in der Vergangenheit)",
-                    plan.getId(), plan.getActiveUntil());
+        if (!plan.isCurrentlyActive()) {
+            result.put("allowed", false);
+            result.put("reason",  "Plan ist inaktiv");
+            result.put("nextFeedbackAvailableAt", null);
+            return result;
         }
+
+        boolean allowed = plan.isFeedbackAllowedThisWeek();
+        result.put("allowed", allowed);
+        result.put("nextFeedbackAvailableAt",
+                plan.getNextFeedbackAvailableAt() != null
+                        ? plan.getNextFeedbackAvailableAt().toString() : null);
+
+        if (!allowed) {
+            result.put("reason", "Feedback wurde diese Woche bereits abgegeben. Nächstes Feedback möglich ab: "
+                    + plan.getNextFeedbackAvailableAt());
+        } else {
+            result.put("reason", "Feedback ist möglich");
+        }
+        return result;
     }
 
     // ===================== FEEDBACK VERARBEITEN =====================
@@ -185,6 +144,19 @@ public class TrainingService {
             throw new SecurityException("Zugriff verweigert");
         }
 
+        // Wöchentliche Sperre prüfen
+        if (!plan.isFeedbackAllowedThisWeek()) {
+            throw new IllegalStateException(
+                    "Feedback für diese Woche bereits abgegeben. Nächstes Feedback möglich ab: "
+                            + plan.getNextFeedbackAvailableAt());
+        }
+
+        // Plan-Status prüfen
+        if (!plan.isCurrentlyActive()) {
+            throw new IllegalStateException("Feedback kann nur für aktive Pläne abgegeben werden.");
+        }
+
+        // Session anlegen
         TrainingSession session = new TrainingSession();
         session.setUser(user);
         session.setTrainingPlan(plan);
@@ -209,25 +181,85 @@ public class TrainingService {
             }
         }
 
+        // RPE-Map für übungsgenaue Anpassung
         Map<Long, Integer> rpeMap = new HashMap<>();
         if (request.exerciseFeedbacks() != null) {
-            request.exerciseFeedbacks().forEach(ef -> rpeMap.put(ef.plannedExerciseId(), ef.exerciseRpe()));
+            request.exerciseFeedbacks().forEach(ef ->
+                    rpeMap.put(ef.plannedExerciseId(), ef.exerciseRpe()));
         }
 
+        // Regelbasierte Anpassung (pro Übung)
         List<PlannedExercise> exercises = plan.getExercises();
-        List<ExerciseAdjustment> adjustments = rpeService.calculateAdjustments(exercises, request.sessionRpe(), rpeMap);
+        List<ExerciseAdjustment> adjustments = rpeService.calculateAdjustments(
+                exercises, request.sessionRpe(), rpeMap);
         exerciseRepo.saveAll(exercises);
 
-        String aiExplanation = aiService.generateExplanation(user, request.sessionRpe(), request.userNote(), adjustments);
+        // KI-Erklärung
+        String aiExplanation = aiService.generateExplanation(
+                user, request.sessionRpe(), request.userNote(), adjustments);
         session.setAiResponse(aiExplanation);
         session = sessionRepo.save(session);
 
+        // Wöchentliche Sperre setzen (7 Tage ab jetzt)
+        LocalDateTime now = LocalDateTime.now();
+        plan.setLastFeedbackAt(now);
+        plan.setNextFeedbackAvailableAt(now.plusDays(7));
+        planRepo.save(plan);
+        log.info("Feedback gespeichert. Nächstes Feedback ab: {}", plan.getNextFeedbackAvailableAt());
+
+        // Adhärenz
         long total     = sessionRepo.countByTrainingPlanId(plan.getId());
         long completed = sessionRepo.countByTrainingPlanIdAndCompletedTrue(plan.getId());
         double pct     = total > 0 ? (double) completed / total * 100.0 : 0.0;
 
         return new SessionFeedbackResponse(session.getId(), request.sessionRpe(), aiExplanation,
                 adjustments, new AdherenceStats(total, completed, pct));
+    }
+
+    // ===================== STATUS ÄNDERN =====================
+
+    public TrainingPlan setActiveStatus(Long planId, Long userId, boolean active) {
+        TrainingPlan plan = getPlanForUser(planId, userId);
+        if (active) {
+            plan.setActive(true);
+            plan.setLastActivatedAt(LocalDateTime.now());
+            plan.setActiveUntil(LocalDateTime.now().plusMonths(1));
+        } else {
+            plan.setActive(false);
+        }
+        return planRepo.save(plan);
+    }
+
+    // ===================== PLAN LÖSCHEN =====================
+
+    public void deletePlan(Long planId, Long userId) {
+        TrainingPlan plan = getPlanForUser(planId, userId);
+        planRepo.delete(plan);
+    }
+
+    // ===================== PLAN ABFRAGEN =====================
+
+    @Transactional(readOnly = true)
+    public TrainingPlan getPlanForUser(Long planId, Long userId) {
+        TrainingPlan plan = planRepo.findById(planId)
+                .orElseThrow(() -> new ResourceNotFoundException("Plan nicht gefunden: " + planId));
+        if (!plan.getUser().getId().equals(userId)) {
+            throw new SecurityException("Zugriff verweigert");
+        }
+        return plan;
+    }
+
+    public List<TrainingPlan> getUserPlans(Long userId) {
+        List<TrainingPlan> plans = planRepo.findByUserId(userId);
+        // Lazy Ablaufprüfung: abgelaufene Pläne automatisch deaktivieren
+        plans.forEach(p -> {
+            if (p.isActive() && p.getActiveUntil() != null
+                    && LocalDateTime.now().isAfter(p.getActiveUntil())) {
+                p.setActive(false);
+                planRepo.save(p);
+            }
+        });
+        return plans;
     }
 
     // ===================== SESSION HISTORY =====================
@@ -252,26 +284,16 @@ public class TrainingService {
     }
 
     private String buildPlanDescription(GeneratePlanRequest req, AiService.GeneratedPlan generated) {
-        StringBuilder desc = new StringBuilder("🤖 KI-generiert: ").append(req.userPrompt());
+        StringBuilder d = new StringBuilder("🤖 KI-generiert: ").append(req.userPrompt());
         if (req.fitnessGoal() != null && !req.fitnessGoal().isBlank())
-            desc.append(" | Ziel: ").append(translateGoal(req.fitnessGoal()));
+            d.append(" | Ziel: ").append(translateGoal(req.fitnessGoal()));
         if (req.daysPerWeek() != null)
-            desc.append(" | ").append(req.daysPerWeek()).append("x/Woche");
-
-        int numDays = generated.days().size();
-        int dpw     = req.daysPerWeek() != null ? req.daysPerWeek() : 3;
-        if (numDays > 0) {
+            d.append(" | ").append(req.daysPerWeek()).append("x/Woche");
+        if (!generated.days().isEmpty()) {
             List<String> names = generated.days().stream().map(AiService.GeneratedDay::dayName).toList();
-            desc.append(" | Tage: ").append(String.join(", ", names));
-            if (numDays > 1 && dpw > numDays) {
-                desc.append(" | Rotation: ");
-                for (int i = 0; i < dpw; i++) {
-                    if (i > 0) desc.append(" → ");
-                    desc.append(names.get(i % numDays));
-                }
-            }
+            d.append(" | Tage: ").append(String.join(", ", names));
         }
-        return desc.toString();
+        return d.toString();
     }
 
     private String translateGoal(String goal) {

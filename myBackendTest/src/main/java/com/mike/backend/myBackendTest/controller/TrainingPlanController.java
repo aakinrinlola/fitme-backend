@@ -15,16 +15,17 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Trainingsplan-Endpoints (JWT erforderlich).
+ * Trainingsplan-Endpoints.
  *
  * POST   /api/training-plans              → Manuell erstellen
  * POST   /api/training-plans/generate     → KI-generiert
- * GET    /api/training-plans              → Alle Pläne des Users
- * GET    /api/training-plans/{planId}     → Einzelner Plan
- * PATCH  /api/training-plans/{planId}/status → Aktiv/Inaktiv umschalten (NEU)
- * DELETE /api/training-plans/{planId}     → Plan löschen
+ * GET    /api/training-plans              → Alle eigenen Pläne
+ * GET    /api/training-plans/{id}         → Einzelplan
+ * GET    /api/training-plans/{id}/feedback-availability → Feedback-Verfügbarkeit (NEU)
+ * PATCH  /api/training-plans/{id}/status  → Aktiv/Inaktiv
+ * DELETE /api/training-plans/{id}         → Löschen
  *
- * WICHTIG: /generate VOR /{planId} gemappt.
+ * WICHTIG: /generate und /{id}/feedback-availability VOR /{id}
  */
 @RestController
 @RequestMapping("/api/training-plans")
@@ -38,7 +39,6 @@ public class TrainingPlanController {
         this.securityHelper  = securityHelper;
     }
 
-    // ── POST /api/training-plans ─────────────────────────────────────────────
     @PostMapping
     public ResponseEntity<Map<String, Object>> createPlan(
             @Valid @RequestBody CreateTrainingPlanRequest request) {
@@ -47,7 +47,6 @@ public class TrainingPlanController {
         return ResponseEntity.status(HttpStatus.CREATED).body(buildSummary(plan, "Trainingsplan erfolgreich erstellt"));
     }
 
-    // ── POST /api/training-plans/generate ────────────────────────────────────
     @PostMapping("/generate")
     public ResponseEntity<Map<String, Object>> generatePlan(
             @Valid @RequestBody GeneratePlanRequest request) {
@@ -56,30 +55,33 @@ public class TrainingPlanController {
         return ResponseEntity.status(HttpStatus.CREATED).body(buildSummary(plan, "KI-Trainingsplan erfolgreich generiert"));
     }
 
-    // ── GET /api/training-plans ──────────────────────────────────────────────
     @GetMapping
     public ResponseEntity<List<Map<String, Object>>> getMyPlans() {
         Long userId = securityHelper.getCurrentUserId();
         return ResponseEntity.ok(
                 trainingService.getUserPlans(userId).stream()
-                        .map(plan -> buildSummary(plan, null))
+                        .map(p -> buildSummary(p, null))
                         .toList()
         );
     }
 
-    // ── GET /api/training-plans/{planId} ─────────────────────────────────────
     @GetMapping("/{planId}")
     public ResponseEntity<Map<String, Object>> getPlan(@PathVariable Long planId) {
         Long userId = securityHelper.getCurrentUserId();
         TrainingPlan plan = trainingService.getPlanForUser(planId, userId);
 
         Map<String, Object> resp = new LinkedHashMap<>();
-        resp.put("id",          plan.getId());
-        resp.put("planName",    plan.getPlanName());
-        resp.put("description", plan.getDescription() != null ? plan.getDescription() : "");
-        resp.put("active",      plan.isActive());
-        resp.put("activeUntil", plan.getActiveUntil() != null ? plan.getActiveUntil().toString() : null);
-        resp.put("exercises",   plan.getExercises().stream().map(e -> {
+        resp.put("id",                      plan.getId());
+        resp.put("planName",                plan.getPlanName());
+        resp.put("description",             plan.getDescription() != null ? plan.getDescription() : "");
+        resp.put("active",                  plan.isActive());
+        resp.put("activeUntil",             plan.getActiveUntil() != null ? plan.getActiveUntil().toString() : null);
+        resp.put("planDurationWeeks",       plan.getPlanDurationWeeks());
+        resp.put("currentWeek",             plan.getCurrentWeek());
+        resp.put("feedbackAllowedThisWeek", plan.isFeedbackAllowedThisWeek());
+        resp.put("nextFeedbackAvailableAt", plan.getNextFeedbackAvailableAt() != null
+                ? plan.getNextFeedbackAvailableAt().toString() : null);
+        resp.put("exercises", plan.getExercises().stream().map(e -> {
             Map<String, Object> ex = new LinkedHashMap<>();
             ex.put("id",           e.getId());
             ex.put("exerciseName", e.getExerciseName());
@@ -96,15 +98,21 @@ public class TrainingPlanController {
         return ResponseEntity.ok(resp);
     }
 
-    // ── PATCH /api/training-plans/{planId}/status ─────────────────────────────
     /**
-     * Ändert den Aktiv-Status eines Plans.
-     *
-     * Request-Body: { "active": true } oder { "active": false }
-     * Response:     { id, active, activeUntil, message }
-     *
-     * Aktivierung:   active=true, activeUntil wird auf jetzt+1Monat gesetzt.
-     * Deaktivierung: active=false, activeUntil bleibt unverändert.
+     * GET /api/training-plans/{planId}/feedback-availability
+     * Prüft ob Feedback für diese Woche möglich ist.
+     * Frontend fragt das beim Laden der Feedback-Seite ab.
+     */
+    @GetMapping("/{planId}/feedback-availability")
+    public ResponseEntity<Map<String, Object>> getFeedbackAvailability(@PathVariable Long planId) {
+        Long userId = securityHelper.getCurrentUserId();
+        Map<String, Object> availability = trainingService.getFeedbackAvailability(planId, userId);
+        return ResponseEntity.ok(availability);
+    }
+
+    /**
+     * PATCH /api/training-plans/{planId}/status
+     * Body: { "active": true } oder { "active": false }
      */
     @PatchMapping("/{planId}/status")
     public ResponseEntity<Map<String, Object>> setStatus(
@@ -123,11 +131,10 @@ public class TrainingPlanController {
         resp.put("id",          plan.getId());
         resp.put("active",      plan.isActive());
         resp.put("activeUntil", plan.getActiveUntil() != null ? plan.getActiveUntil().toString() : null);
-        resp.put("message",     active ? "Plan wurde aktiviert (aktiv für 1 Monat)" : "Plan wurde deaktiviert");
+        resp.put("message",     active ? "Plan aktiviert (1 Monat)" : "Plan deaktiviert");
         return ResponseEntity.ok(resp);
     }
 
-    // ── DELETE /api/training-plans/{planId} ──────────────────────────────────
     @DeleteMapping("/{planId}")
     public ResponseEntity<Void> deletePlan(@PathVariable Long planId) {
         Long userId = securityHelper.getCurrentUserId();
@@ -135,16 +142,18 @@ public class TrainingPlanController {
         return ResponseEntity.noContent().build();
     }
 
-    // ── Helper ───────────────────────────────────────────────────────────────
-
-    /** Baut eine einheitliche Plan-Summary-Response (inkl. activeUntil) */
     private Map<String, Object> buildSummary(TrainingPlan plan, String message) {
         Map<String, Object> map = new LinkedHashMap<>();
-        map.put("id",            plan.getId());
-        map.put("planName",      plan.getPlanName());
-        map.put("exerciseCount", plan.getExercises().size());
-        map.put("active",        plan.isActive());
-        map.put("activeUntil",   plan.getActiveUntil() != null ? plan.getActiveUntil().toString() : null);
+        map.put("id",                      plan.getId());
+        map.put("planName",                plan.getPlanName());
+        map.put("exerciseCount",           plan.getExercises().size());
+        map.put("active",                  plan.isActive());
+        map.put("activeUntil",             plan.getActiveUntil() != null ? plan.getActiveUntil().toString() : null);
+        map.put("currentWeek",             plan.getCurrentWeek());
+        map.put("planDurationWeeks",       plan.getPlanDurationWeeks());
+        map.put("feedbackAllowedThisWeek", plan.isFeedbackAllowedThisWeek());
+        map.put("nextFeedbackAvailableAt", plan.getNextFeedbackAvailableAt() != null
+                ? plan.getNextFeedbackAvailableAt().toString() : null);
         if (message != null) map.put("message", message);
         return map;
     }

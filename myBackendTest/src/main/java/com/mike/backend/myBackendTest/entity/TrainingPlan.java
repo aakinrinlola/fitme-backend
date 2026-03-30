@@ -3,6 +3,7 @@ package com.mike.backend.myBackendTest.entity;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -31,26 +32,41 @@ public class TrainingPlan {
     @OrderBy("sessionDate DESC")
     private List<TrainingSession> sessions = new ArrayList<>();
 
-    /** Manuell gesetzter Aktiv-Status (kann auch durch Ablauf überschrieben werden) */
     private boolean active = true;
 
-    /** Erstellungszeitpunkt — wird nie verändert */
+    /** Erstellungszeitpunkt — nie verändern */
     private LocalDateTime createdAt = LocalDateTime.now();
 
-    /**
-     * Zeitpunkt der letzten manuellen Aktivierung.
-     * Wird gesetzt bei: Erstellung + jeder manuellen Reaktivierung.
-     */
+    /** Letztes manuelles Aktivieren */
     @Column(name = "last_activated_at")
     private LocalDateTime lastActivatedAt;
 
     /**
-     * Plan ist aktiv bis zu diesem Zeitpunkt.
-     * Berechnung: lastActivatedAt + 1 Monat
-     * Wird gesetzt bei: Erstellung + jeder manuellen Reaktivierung.
+     * Aktiv bis (createdAt + 1 Monat bei Erstellung,
+     * lastActivatedAt + 1 Monat bei Reaktivierung)
      */
     @Column(name = "active_until")
     private LocalDateTime activeUntil;
+
+    // ── Wochenstruktur ───────────────────────────────────────────
+
+    /** Feste Laufzeit in Wochen (Standard: 4) */
+    @Column(name = "plan_duration_weeks")
+    private int planDurationWeeks = 4;
+
+    /**
+     * Zeitpunkt des letzten abgesendeten Feedbacks.
+     * Dient zur wöchentlichen Sperr-Logik.
+     */
+    @Column(name = "last_feedback_at")
+    private LocalDateTime lastFeedbackAt;
+
+    /**
+     * Ab diesem Zeitpunkt ist das nächste Feedback wieder möglich
+     * (= lastFeedbackAt + 7 Tage).
+     */
+    @Column(name = "next_feedback_available_at")
+    private LocalDateTime nextFeedbackAvailableAt;
 
     // ---- Constructors ----
     public TrainingPlan() {}
@@ -58,10 +74,38 @@ public class TrainingPlan {
     public TrainingPlan(String planName, AppUser user) {
         this.planName = planName;
         this.user = user;
-        // Beim Erstellen: sofort aktivieren für 1 Monat
         this.active = true;
         this.lastActivatedAt = LocalDateTime.now();
         this.activeUntil = this.lastActivatedAt.plusMonths(1);
+    }
+
+    // ---- Business logic ----
+
+    /** True wenn Plan gerade aktiv UND activeUntil noch nicht abgelaufen */
+    public boolean isCurrentlyActive() {
+        if (!active) return false;
+        if (activeUntil == null) return true;
+        return LocalDateTime.now().isBefore(activeUntil);
+    }
+
+    /**
+     * Aktuelle Planwoche (1–planDurationWeeks).
+     * Basiert auf Erstellungsdatum.
+     */
+    public int getCurrentWeek() {
+        long daysSinceCreation = ChronoUnit.DAYS.between(createdAt.toLocalDate(),
+                LocalDateTime.now().toLocalDate());
+        int week = (int) (daysSinceCreation / 7) + 1;
+        return Math.min(week, planDurationWeeks);
+    }
+
+    /**
+     * Gibt an, ob für diese Woche bereits Feedback gegeben wurde.
+     * Wird anhand von nextFeedbackAvailableAt geprüft.
+     */
+    public boolean isFeedbackAllowedThisWeek() {
+        if (nextFeedbackAvailableAt == null) return true;
+        return LocalDateTime.now().isAfter(nextFeedbackAvailableAt);
     }
 
     // ---- Getters & Setters ----
@@ -95,13 +139,14 @@ public class TrainingPlan {
     public LocalDateTime getActiveUntil() { return activeUntil; }
     public void setActiveUntil(LocalDateTime activeUntil) { this.activeUntil = activeUntil; }
 
-    /**
-     * Prüft ob der Plan aktuell wirklich aktiv ist (berücksichtigt Ablaufdatum).
-     * Nutze diese Methode für Geschäftslogik statt isActive() direkt.
-     */
-    public boolean isCurrentlyActive() {
-        if (!active) return false;
-        if (activeUntil == null) return true; // Kein Ablaufdatum → bleibt aktiv (Rückwärtskompatibilität)
-        return LocalDateTime.now().isBefore(activeUntil);
+    public int getPlanDurationWeeks() { return planDurationWeeks; }
+    public void setPlanDurationWeeks(int planDurationWeeks) { this.planDurationWeeks = planDurationWeeks; }
+
+    public LocalDateTime getLastFeedbackAt() { return lastFeedbackAt; }
+    public void setLastFeedbackAt(LocalDateTime lastFeedbackAt) { this.lastFeedbackAt = lastFeedbackAt; }
+
+    public LocalDateTime getNextFeedbackAvailableAt() { return nextFeedbackAvailableAt; }
+    public void setNextFeedbackAvailableAt(LocalDateTime nextFeedbackAvailableAt) {
+        this.nextFeedbackAvailableAt = nextFeedbackAvailableAt;
     }
 }

@@ -12,17 +12,18 @@ public class WebConfig implements WebMvcConfigurer {
     @Bean
     public WebClient webClient() {
         return WebClient.builder()
-            .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(2 * 1024 * 1024))
-            .build();
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(2 * 1024 * 1024))
+                .build();
     }
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
-        // Angular Frontend darf auf alle Endpoints zugreifen
         registry.addMapping("/api/**")
-            .allowedOrigins("http://localhost:4200", "http://localhost:3000")
-            .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-            .allowedHeaders("*")
-            .allowCredentials(true);
+                .allowedOrigins("http://localhost:4200", "http://localhost:3000")
+                // FIX: PATCH und OPTIONS explizit erlauben (CORS Preflight für PATCH-Requests)
+                .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+                .allowedHeaders("*")
+                .allowCredentials(true)
+                .maxAge(3600);
     }
 }
