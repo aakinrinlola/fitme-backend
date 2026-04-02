@@ -4,28 +4,27 @@ spring:
   profiles:
     active: dev
 
-# ===================== CORS (shared across profiles) =====================
 cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:4200,http://localhost:3000}
 
-# ===================== JWT KONFIGURATION =====================
 jwt:
   secret: ${JWT_SECRET:dGhpcyBpcyBhIHZlcnkgc2VjdXJlIHNlY3JldCBrZXkgZm9yIGp3dCB0b2tlbnMgMTIzNDU2Nzg5MA==}
   access-token-expiration-ms: 3600000
   refresh-token-expiration-ms: 604800000
 
-# ===================== AUTH MODE =====================
-# "local" = eigene JWT-Auth (JwtService + JwtAuthenticationFilter)
-# "auth0" = Auth0 OAuth2 Resource Server (RS256 + JWKS)
 auth:
   mode: ${AUTH_MODE:local}
 
 ---
-# ===================== DEV PROFILE (H2 + lokale JWT-Auth) =====================
+# ===================== DEV PROFILE =====================
 spring:
   config:
     activate:
       on-profile: dev
+  # Suppress OAuth2 Resource Server auto-config — not needed in local-JWT mode
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.oauth2.resource.servlet.OAuth2ResourceServerAutoConfiguration
   datasource:
     url: jdbc:h2:mem:trainingsdb
     driver-class-name: org.h2.Driver
@@ -61,11 +60,14 @@ server:
   port: 8080
 
 ---
-# ===================== DOCKER PROFILE (PostgreSQL lokal) =====================
+# ===================== DOCKER PROFILE =====================
 spring:
   config:
     activate:
       on-profile: docker
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.oauth2.resource.servlet.OAuth2ResourceServerAutoConfiguration
   datasource:
     url: jdbc:postgresql://${DB_HOST:postgres}:${DB_PORT:5432}/${DB_NAME:trainingsdb}
     username: ${DB_USER:trainingsuser}
@@ -116,7 +118,6 @@ spring:
   sql:
     init:
       mode: never
-  # Auth0 Resource Server — validiert Auth0 JWTs über JWKS
   security:
     oauth2:
       resourceserver:
@@ -137,6 +138,5 @@ ai:
 auth:
   mode: auth0
 
-# Railway setzt PORT automatisch
 server:
   port: ${PORT:8080}

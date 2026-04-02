@@ -14,19 +14,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Trainingsplan-Endpoints.
- *
- * POST   /api/training-plans              → Manuell erstellen
- * POST   /api/training-plans/generate     → KI-generiert
- * GET    /api/training-plans              → Alle eigenen Pläne
- * GET    /api/training-plans/{id}         → Einzelplan
- * GET    /api/training-plans/{id}/feedback-availability → Feedback-Verfügbarkeit (NEU)
- * PATCH  /api/training-plans/{id}/status  → Aktiv/Inaktiv
- * DELETE /api/training-plans/{id}         → Löschen
- *
- * WICHTIG: /generate und /{id}/feedback-availability VOR /{id}
- */
 @RestController
 @RequestMapping("/api/training-plans")
 public class TrainingPlanController {
@@ -92,17 +79,14 @@ public class TrainingPlanController {
             ex.put("targetRpe",    e.getTargetRpe() != null ? e.getTargetRpe() : 7);
             ex.put("order",        e.getExerciseOrder());
             ex.put("trainingDay",  e.getTrainingDay() != null ? e.getTrainingDay() : "");
+            // NEU: Beschreibung (leer für normale Übungen, gefüllt für Mobility)
+            ex.put("description",  e.getDescription() != null ? e.getDescription() : "");
             return ex;
         }).toList());
 
         return ResponseEntity.ok(resp);
     }
 
-    /**
-     * GET /api/training-plans/{planId}/feedback-availability
-     * Prüft ob Feedback für diese Woche möglich ist.
-     * Frontend fragt das beim Laden der Feedback-Seite ab.
-     */
     @GetMapping("/{planId}/feedback-availability")
     public ResponseEntity<Map<String, Object>> getFeedbackAvailability(@PathVariable Long planId) {
         Long userId = securityHelper.getCurrentUserId();
@@ -110,10 +94,6 @@ public class TrainingPlanController {
         return ResponseEntity.ok(availability);
     }
 
-    /**
-     * PATCH /api/training-plans/{planId}/status
-     * Body: { "active": true } oder { "active": false }
-     */
     @PatchMapping("/{planId}/status")
     public ResponseEntity<Map<String, Object>> setStatus(
             @PathVariable Long planId,

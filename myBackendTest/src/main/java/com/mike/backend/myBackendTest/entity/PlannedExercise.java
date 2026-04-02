@@ -27,28 +27,29 @@ public class PlannedExercise {
 
     private int exerciseOrder;
 
-    /** Ziel-RPE für diese Übung */
     private Integer targetRpe;
 
-    /**
-     * Trainingstag-Bezeichnung (z.B. "Tag A", "Tag B", "Push", "Pull").
-     * NULL = kein mehrtägiger Plan (alter Datensatz oder manuell erstellt).
-     */
     @Column(name = "training_day")
     private String trainingDay;
+
+    /**
+     * Kurze Ausführungsbeschreibung (vor allem für Mobilitätsübungen).
+     * Leer für normale Kraftübungen.
+     */
+    @Column(columnDefinition = "TEXT")
+    private String description;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "training_plan_id", nullable = false)
     private TrainingPlan trainingPlan;
 
-    // ---- Constructors ----
     public PlannedExercise() {}
 
     public PlannedExercise(String exerciseName, int sets, int reps, double weightKg) {
         this.exerciseName = exerciseName;
-        this.sets = sets;
-        this.reps = reps;
-        this.weightKg = weightKg;
+        this.sets         = sets;
+        this.reps         = reps;
+        this.weightKg     = weightKg;
     }
 
     // ---- Getters & Setters ----
@@ -78,6 +79,9 @@ public class PlannedExercise {
 
     public String getTrainingDay() { return trainingDay; }
     public void setTrainingDay(String trainingDay) { this.trainingDay = trainingDay; }
+
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
 
     public TrainingPlan getTrainingPlan() { return trainingPlan; }
     public void setTrainingPlan(TrainingPlan trainingPlan) { this.trainingPlan = trainingPlan; }
