@@ -22,45 +22,42 @@ public class AppUser {
     @Column(unique = true, nullable = false)
     private String email;
 
-    /** BCrypt-gehashtes Passwort */
     @Column(nullable = false)
     private String password;
 
-    /** Rolle: USER oder ADMIN */
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Role role = Role.USER;
 
     private Integer age;
-
     private Double weightKg;
-
     private Double heightCm;
 
     @Enumerated(EnumType.STRING)
     private FitnessLevel fitnessLevel = FitnessLevel.BEGINNER;
 
+    /**
+     * Persönliche Motivations-Botschaft des Users.
+     * Wird auf dem Dashboard angezeigt.
+     */
+    @Column(length = 300)
+    private String motivationalMessage;
+
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<TrainingPlan> trainingPlans = new ArrayList<>();
 
     private LocalDateTime createdAt = LocalDateTime.now();
-
     private boolean enabled = true;
 
-    public enum FitnessLevel {
-        BEGINNER, INTERMEDIATE, ADVANCED
-    }
-
-    public enum Role {
-        USER, ADMIN
-    }
+    public enum FitnessLevel { BEGINNER, INTERMEDIATE, ADVANCED }
+    public enum Role { USER, ADMIN }
 
     // ---- Constructors ----
     public AppUser() {}
 
     public AppUser(String username, String email, String password) {
         this.username = username;
-        this.email = email;
+        this.email    = email;
         this.password = password;
     }
 
@@ -91,6 +88,9 @@ public class AppUser {
 
     public FitnessLevel getFitnessLevel() { return fitnessLevel; }
     public void setFitnessLevel(FitnessLevel fitnessLevel) { this.fitnessLevel = fitnessLevel; }
+
+    public String getMotivationalMessage() { return motivationalMessage; }
+    public void setMotivationalMessage(String motivationalMessage) { this.motivationalMessage = motivationalMessage; }
 
     public List<TrainingPlan> getTrainingPlans() { return trainingPlans; }
     public void setTrainingPlans(List<TrainingPlan> trainingPlans) { this.trainingPlans = trainingPlans; }

@@ -13,5 +13,6 @@ public record UpdateProfileRequest(
     Integer age,
     Double weightKg,
     Double heightCm,
-    String fitnessLevel
+    String fitnessLevel,
+    @Size(max = 300) String motivationalMessage
 ) {}
