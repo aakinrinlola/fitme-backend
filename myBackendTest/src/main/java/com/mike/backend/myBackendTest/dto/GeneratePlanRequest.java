@@ -23,32 +23,36 @@ public record GeneratePlanRequest(
 
         String experienceLevel,
 
-        // ── Neu: Trainingsdauer ──────────────────────────────────────────
-        /** Minuten pro Einheit: 30 / 45 / 60 / 75 / 90 */
         @Min(15) @Max(180)
         Integer sessionDurationMinutes,
 
-        // ── Neu: Regeneration ────────────────────────────────────────────
-        /** Schlafstunden pro Nacht (Volumen-Anpassung) */
         @Min(3) @Max(12)
         Integer sleepHoursPerNight,
 
-        /** Stresslevel: LOW / MODERATE / HIGH */
+        /** LOW / MODERATE / HIGH */
         String stressLevel,
 
-        // ── Neu: Verletzungen ────────────────────────────────────────────
-        /** Freitext für Schmerzen / Einschränkungen */
         String injuries,
 
-        // ── Neu: Fokus (Chips + Freitext) ────────────────────────────────
-        /** Vordefinierte Chip-Auswahl, z.B. ["Beine","Glutes"] */
         List<String> focusMuscleGroups,
 
-        /** Zusätzlicher Freitext-Fokus */
         String focusMusclesFreetext,
 
-        // ── Neu: Mobilitätsplan ──────────────────────────────────────────
-        /** true → KI erstellt zusätzlichen Mobilitätsblock */
-        Boolean includeMobilityPlan
+        Boolean includeMobilityPlan,
+
+        /**
+         * Steuert die Tages-Aufteilung wenn Fokus-Muskelgruppen gewählt sind.
+         *
+         * "DOUBLE_FOCUS" → Fokus-Muskelgruppe bekommt 2 Trainingstage mit
+         *                  unterschiedlichem Schwerpunkt (z.B. Beine-Quad + Beine-Hinge).
+         *                  Bei 3 Tagen: 2 Fokus-Tage + 1 anderer Tag.
+         *                  Bei 2 Tagen: 2 Fokus-Tage.
+         *
+         * "BALANCED"     → Klassischer Split (Push/Pull/Legs o.ä.),
+         *                  Fokus-Tag kommt als Tag A zuerst.
+         *
+         * null           → Standard (= BALANCED-Verhalten)
+         */
+        String focusStrategy
 
 ) {}

@@ -196,24 +196,353 @@ public class AiService {
 
     /**
      * Validiert und bereichert den generierten Plan:
-     *  1. Duplikate über Tage hinweg erkennen & durch Pool-Alternativen ersetzen
-     *  2. Explosive Übung auf Bein-Tagen sicherstellen (INTERMEDIATE/ADVANCED)
-     *  3. Übungsanzahl pro Tag prüfen & ggf. trimmen
+     *  0. Mobilitätsblock vom Rest trennen (wird separat behandelt)
+     *  1. Trainingstage auf maximal numDayPlans kappen (verhindert 4+ Tage)
+     *  2. Duplikate über Tage hinweg erkennen & durch Pool-Alternativen ersetzen
+     *  3. Explosive Übung auf Bein-Tagen sicherstellen (INTERMEDIATE/ADVANCED)
+     *  4. Übungsanzahl pro Tag prüfen & ggf. trimmen
+     *  5. Mobilitätsblock garantiert anhängen wenn gewünscht — mit Qualitätsprüfung
      */
     private GeneratedPlan validateAndEnrichPlan(GeneratedPlan plan,
                                                 GeneratePlanRequest request,
                                                 AppUser user) {
         if (plan == null || plan.days().isEmpty()) return plan;
 
-        GeneratedPlan result = deduplicateAcrossDays(plan);
+        // ── Schritt 0: Mobilitätsblock vom Rest trennen ──────────────────────
+        List<GeneratedDay> trainingDays = plan.days().stream()
+                .filter(d -> !"Mobilitätsblock".equalsIgnoreCase(d.dayName()))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        GeneratedDay kiMobilityDay = plan.days().stream()
+                .filter(d -> "Mobilitätsblock".equalsIgnoreCase(d.dayName()))
+                .findFirst().orElse(null);
 
+        // ── Schritt 1: Trainingstage auf numDayPlans kappen ─────────────────
+        int numDayPlans = calcNumDayPlans(request.daysPerWeek() != null ? request.daysPerWeek() : 3);
+        if (trainingDays.size() > numDayPlans) {
+            log.warn("KI hat {} Trainingstage geliefert — kürze auf {}", trainingDays.size(), numDayPlans);
+            trainingDays = new ArrayList<>(trainingDays.subList(0, numDayPlans));
+        }
+
+        // ── Schritt 2: Duplikat-Bereinigung (nur Trainingstage) ──────────────
+        GeneratedPlan trimmed = new GeneratedPlan(plan.planName(), plan.description(), trainingDays);
+        GeneratedPlan result  = deduplicateAcrossDays(trimmed);
+
+        // ── Schritt 3: Explosive Übungen sicherstellen ───────────────────────
         String level = resolveRawLevel(request, user);
         if ("INTERMEDIATE".equals(level) || "ADVANCED".equals(level)) {
             result = ensureExplosiveOnLegDays(result);
         }
 
+        // ── Schritt 4: Übungsanzahl pro Tag prüfen ───────────────────────────
         result = ensureExerciseCount(result, request, user);
+
+        // ── Schritt 5: Mobilitätsblock als Hybrid einfügen ─────────────────
+        List<GeneratedDay> finalDays = new ArrayList<>(result.days());
+        if (Boolean.TRUE.equals(request.includeMobilityPlan())) {
+            GeneratedDay hybridMobilityDay = buildHybridMobilityDay(kiMobilityDay);
+            finalDays.add(hybridMobilityDay);
+            log.info("Mobilitätsblock als Hybrid erstellt (3 Fallback-Basisübungen + bis zu 3 KI-Übungen)");
+        }
+
+        return new GeneratedPlan(result.planName(), result.description(), finalDays);
+    }
+
+    /**
+     * Erstellt den finalen Mobilitätsblock als Hybrid:
+     *  - 3 kuratierte Fallback-Übungen (verlässliche Basis)
+     *  - 3 qualitative KI-Übungen (individualisierte Ergänzung)
+     *
+     * Wenn die KI weniger als 3 brauchbare Mobility-Übungen liefert,
+     * werden die fehlenden Slots mit weiteren kuratierten Fallback-Übungen aufgefüllt.
+     */
+    private GeneratedDay buildHybridMobilityDay(GeneratedDay kiMobilityDay) {
+        List<GeneratedExercise> finalExercises = new ArrayList<>();
+        Set<String> usedNames = new LinkedHashSet<>();
+
+        for (GeneratedExercise fallback : buildFallbackMobilityFoundationExercises()) {
+            finalExercises.add(markAsFallbackMobility(fallback));
+            usedNames.add(normalizeMobilityExerciseName(fallback.exerciseName()));
+        }
+
+        List<GeneratedExercise> kiExercises = extractQualitativeKiMobilityExercises(kiMobilityDay);
+        int addedKi = 0;
+        for (GeneratedExercise exercise : kiExercises) {
+            if (addedKi >= 3) break;
+            String normalized = normalizeMobilityExerciseName(exercise.exerciseName());
+            if (usedNames.contains(normalized)) continue;
+            finalExercises.add(markAsKiMobility(exercise));
+            usedNames.add(normalized);
+            addedKi++;
+        }
+
+        if (addedKi < 3) {
+            log.warn("KI lieferte nur {} qualitative Mobility-Übungen — ergänze mit Fallback", addedKi);
+            for (GeneratedExercise fallback : buildFallbackMobilityReserveExercises()) {
+                if (finalExercises.size() >= 6) break;
+                String normalized = normalizeMobilityExerciseName(fallback.exerciseName());
+                if (usedNames.contains(normalized)) continue;
+                finalExercises.add(markAsFallbackMobility(fallback));
+                usedNames.add(normalized);
+            }
+        }
+
+        return new GeneratedDay("Mobilitätsblock", "Mobility & Dehnung",
+                finalExercises.subList(0, Math.min(6, finalExercises.size())));
+    }
+
+    /**
+     * Gibt true zurück wenn der Übungsname typisch für ein Krafttraining ist
+     * und NICHT in einen Mobilitätsblock gehört.
+     */
+    private boolean isMobilityBlockStrengthExercise(String name) {
+        if (name == null) return false;
+        String n = name.toLowerCase();
+        return n.contains("kniebeuge")
+                || n.contains("bankdrücken")
+                || n.contains("kreuzheben")
+                || n.contains("klimmzüge")
+                || n.contains("rudern")
+                || n.contains("schulterdrücken")
+                || n.contains("beinpresse")
+                || n.contains("beinstrecker")
+                || n.contains("beinbeuger")
+                || n.contains("seitheben")
+                || n.contains("trizeps")
+                || n.contains("bizeps")
+                || n.contains("curl")
+                || n.contains("press")
+                || n.contains("squat")
+                || n.contains("deadlift")
+                || n.contains("bench")
+                || n.contains("mit gewicht")
+                || n.contains("langhantel")
+                || n.contains("kurzhantel")
+                || n.contains("kabelzug")
+                || n.contains("maschine");
+    }
+
+    private List<GeneratedExercise> extractQualitativeKiMobilityExercises(GeneratedDay kiMobilityDay) {
+        if (kiMobilityDay == null || kiMobilityDay.exercises() == null || kiMobilityDay.exercises().isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<GeneratedExercise> result = new ArrayList<>();
+        for (GeneratedExercise exercise : kiMobilityDay.exercises()) {
+            if (!isQualitativeMobilityExercise(exercise)) {
+                log.debug("KI-Mobility verworfen: '{}'", exercise.exerciseName());
+                continue;
+            }
+            result.add(normalizeKiMobilityExercise(exercise));
+        }
         return result;
+    }
+
+    private boolean isQualitativeMobilityExercise(GeneratedExercise exercise) {
+        if (exercise == null || exercise.exerciseName() == null || exercise.exerciseName().isBlank()) return false;
+
+        String normalizedName = normalizeMobilityExerciseName(exercise.exerciseName());
+        if (normalizedName.isBlank()) return false;
+        if (isMobilityBlockStrengthExercise(exercise.exerciseName())) return false;
+        if (!looksLikeRealMobilityExercise(exercise.exerciseName())) return false;
+        if (exercise.weightKg() > 0.0) return false;
+        if (exercise.sets() > 3) return false;
+        if (exercise.targetRpe() > 4) return false;
+
+        return true;
+    }
+
+    private boolean looksLikeRealMobilityExercise(String name) {
+        if (name == null) return false;
+        String n = name.toLowerCase().trim();
+
+        if (n.equals("mobilitätsübung") || n.equals("stretching") || n.equals("mobility")) return false;
+
+        return n.contains("stretch")
+                || n.contains("rotation")
+                || n.contains("pose")
+                || n.contains("hold")
+                || n.contains("cat-cow")
+                || n.contains("cat cow")
+                || n.contains("90/90")
+                || n.contains("thoracic")
+                || n.contains("ankle")
+                || n.contains("hip")
+                || n.contains("couch")
+                || n.contains("pigeon")
+                || n.contains("thread the needle")
+                || n.contains("adductor rock back")
+                || n.contains("rock back")
+                || n.contains("deep squat")
+                || n.contains("child")
+                || n.contains("world's greatest")
+                || n.contains("worlds greatest")
+                || n.contains("wall drill")
+                || n.contains("mobilisation")
+                || n.contains("mobilization");
+    }
+
+    private GeneratedExercise normalizeKiMobilityExercise(GeneratedExercise exercise) {
+        int normalizedSets = clamp(exercise.sets(), 1, 2);
+        int normalizedReps = clamp(exercise.reps(), 6, 60);
+        String description = buildHighQualityMobilityDescription(exercise.exerciseName(), exercise.description());
+
+        return new GeneratedExercise(
+                cleanMobilityExerciseName(exercise.exerciseName()),
+                normalizedSets,
+                normalizedReps,
+                0.0,
+                30,
+                3,
+                description
+        );
+    }
+
+    private GeneratedExercise markAsFallbackMobility(GeneratedExercise exercise) {
+        return new GeneratedExercise(
+                exercise.exerciseName(),
+                exercise.sets(),
+                exercise.reps(),
+                0.0,
+                30,
+                3,
+                buildHighQualityMobilityDescription(exercise.exerciseName(), exercise.description())
+        );
+    }
+
+    private GeneratedExercise markAsKiMobility(GeneratedExercise exercise) {
+        return new GeneratedExercise(
+                exercise.exerciseName(),
+                exercise.sets(),
+                exercise.reps(),
+                0.0,
+                30,
+                3,
+                buildHighQualityMobilityDescription(exercise.exerciseName(), exercise.description())
+        );
+    }
+
+    private String cleanMobilityExerciseName(String name) {
+        if (name == null) return "Mobility-Übung";
+        return name.trim().replaceAll("\\s+", " ");
+    }
+
+    private String normalizeMobilityExerciseName(String name) {
+        if (name == null) return "";
+        return name.toLowerCase()
+                .replace("’", "'")
+                .replaceAll("[^a-z0-9äöüß/ ]", "")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    private String buildHighQualityMobilityDescription(String exerciseName, String aiDescription) {
+        String curated = getCuratedMobilityDescription(exerciseName);
+        if (curated != null) return curated;
+
+        if (aiDescription != null && aiDescription.trim().length() >= 90) {
+            String normalized = aiDescription.trim().replaceAll("\\s+", " ");
+            if (!normalized.endsWith(".")) normalized += ".";
+            return normalized;
+        }
+
+        return "Starte kontrolliert in einer stabilen Ausgangsposition und richte den Oberkörper aktiv auf. "
+                + "Bewege dich langsam in die Endposition, bis du eine deutliche, aber angenehme Dehnung oder Mobilisation spürst. "
+                + "Halte die Spannung ruhig, atme gleichmäßig weiter und vermeide Ausweichbewegungen oder Schwung.";
+    }
+
+    private String getCuratedMobilityDescription(String exerciseName) {
+        if (exerciseName == null) return null;
+        String n = exerciseName.toLowerCase();
+
+        if (n.contains("hip flexor stretch")) {
+            return "Gehe in einen halben Kniestand, ein Fuß steht vorne stabil auf dem Boden, das hintere Knie liegt weich auf. "
+                    + "Spanne Gesäß und Bauch an und schiebe die Hüfte langsam nach vorne, bis du die Dehnung deutlich an der Vorderseite der Hüfte des hinteren Beins spürst. "
+                    + "Der Oberkörper bleibt aufrecht, das Hohlkreuz wird vermieden und die Bewegung erfolgt ruhig ohne Wippen.";
+        }
+        if (n.contains("thoracic rotation")) {
+            return "Gehe in den Vierfüßlerstand oder in die Seitlage mit stabiler Beckenposition. "
+                    + "Führe den oberen Arm langsam auf und rotiere die Brustwirbelsäule kontrolliert, ohne dass die Hüfte mitdreht. "
+                    + "Der Blick folgt der Hand, die Atmung bleibt ruhig und die Bewegung kommt bewusst aus dem oberen Rücken.";
+        }
+        if (n.contains("world's greatest stretch") || n.contains("worlds greatest stretch")) {
+            return "Mache einen großen Ausfallschritt nach vorne und platziere beide Hände kontrolliert neben dem vorderen Fuß. "
+                    + "Senke die Hüfte leicht ab, öffne anschließend den Oberkörper zur vorderen Seite und strecke den oberen Arm aktiv zur Decke. "
+                    + "Die Ferse des vorderen Fußes bleibt stabil am Boden und die Rotation kommt aus Brustwirbelsäule und Hüfte, nicht aus Schwung.";
+        }
+        if (n.contains("cat-cow") || n.contains("cat cow")) {
+            return "Starte im Vierfüßlerstand mit Händen unter den Schultern und Knien unter der Hüfte. "
+                    + "Beim Einatmen ziehst du das Brustbein nach vorne und lässt den Rücken kontrolliert in die Streckung gehen, beim Ausatmen rundest du die Wirbelsäule Wirbel für Wirbel nach oben. "
+                    + "Die Bewegung soll fließend sein und bewusst über die ganze Wirbelsäule stattfinden, ohne ins Hohlkreuz zu fallen.";
+        }
+        if (n.contains("90/90 hip stretch")) {
+            return "Setze dich aufrecht in die 90/90-Position, wobei beide Knie etwa im rechten Winkel gebeugt sind. "
+                    + "Richte den Oberkörper lang auf und lehne dich langsam über das vordere Schienbein oder rotiere kontrolliert zur anderen Seite. "
+                    + "Das Becken bleibt möglichst stabil am Boden und die Dehnung soll tief in Hüfte und Gesäß spürbar sein, ohne dass du einsackst.";
+        }
+        if (n.contains("pigeon pose")) {
+            return "Bringe aus dem Vierfüßlerstand ein Knie nach vorne und lege den Unterschenkel so ab, wie es deine Hüftbeweglichkeit zulässt. "
+                    + "Schiebe das hintere Bein lang nach hinten und senke den Oberkörper langsam über das vordere Bein ab. "
+                    + "Achte darauf, dass die Hüfte möglichst gerade bleibt und du die Position ruhig hältst, statt in die Dehnung hineinzudrücken.";
+        }
+        if (n.contains("couch stretch")) {
+            return "Positioniere ein Knie nahe an einer Wand oder Bank, das andere Bein steht vorne im halben Kniestand. "
+                    + "Richte den Oberkörper langsam auf und spanne Gesäß sowie Bauch aktiv an, damit die Dehnung an der Vorderseite von Oberschenkel und Hüfte zunimmt. "
+                    + "Bleibe lang im Oberkörper und vermeide es, ins Hohlkreuz auszuweichen oder die Spannung zu verlieren.";
+        }
+        if (n.contains("deep squat hold")) {
+            return "Gehe kontrolliert in eine tiefe Kniebeuge, die Füße bleiben stabil vollflächig am Boden. "
+                    + "Drücke die Knie leicht nach außen, richte die Brust auf und halte die Position aktiv, statt passiv einzusacken. "
+                    + "Die Fersen bleiben unten und die Spannung in Rumpf und Hüfte sorgt dafür, dass die Haltung sauber und ruhig bleibt.";
+        }
+        if (n.contains("doorway chest stretch")) {
+            return "Stelle dich in einen Türrahmen und platziere Unterarm und Ellenbogen etwa auf Schulterhöhe am Rahmen. "
+                    + "Gehe langsam mit dem Oberkörper oder dem gegenüberliegenden Bein nach vorne, bis du die Dehnung klar in Brust und vorderer Schulter spürst. "
+                    + "Die Schulter bleibt tief und entspannt, du weichst nicht ins Hohlkreuz aus und gehst nicht ruckartig in die Endposition.";
+        }
+        if (n.contains("thread the needle")) {
+            return "Starte im Vierfüßlerstand und schiebe einen Arm langsam unter dem Körper nach innen durch. "
+                    + "Lege Schulter und Kopf kontrolliert ab und rotiere den Oberkörper sanft, während die andere Hand stabil unterstützt oder nach vorne greift. "
+                    + "Die Bewegung bleibt ruhig und kommt aus Brustwirbelsäule und Schultergürtel, nicht aus Schwung.";
+        }
+        if (n.contains("ankle dorsiflexion wall drill")) {
+            return "Stelle einen Fuß einige Zentimeter vor eine Wand und halte die Ferse vollständig am Boden. "
+                    + "Schiebe das Knie langsam nach vorne in Richtung Wand, ohne dass der Fuß einknickt oder die Ferse abhebt. "
+                    + "Arbeite kontrolliert in den schmerzfreien Bewegungsbereich und halte die Fußachse stabil über dem Mittelfuß.";
+        }
+        if (n.contains("adductor rock back")) {
+            return "Gehe in den Vierfüßlerstand und strecke ein Bein seitlich aus, der Fuß bleibt flach oder leicht aufgestellt. "
+                    + "Schiebe die Hüfte langsam nach hinten, bis du die Dehnung an der Innenseite des ausgestreckten Beins spürst. "
+                    + "Der Rücken bleibt neutral, das Becken kontrolliert und die Bewegung erfolgt ruhig ohne Einrollen der Wirbelsäule.";
+        }
+        return null;
+    }
+
+    private List<GeneratedExercise> buildFallbackMobilityFoundationExercises() {
+        return List.of(
+                new GeneratedExercise("World's Greatest Stretch", 2, 8, 0.0, 30, 3,
+                        "Großer Ausfallschritt, Hüfte senken und Oberkörper kontrolliert aufdrehen."),
+                new GeneratedExercise("90/90 Hip Stretch", 2, 45, 0.0, 30, 3,
+                        "Aufrecht in der 90/90-Position sitzen und die Hüfte kontrolliert mobilisieren."),
+                new GeneratedExercise("Thoracic Rotation", 2, 10, 0.0, 30, 3,
+                        "Brustwirbelsäule kontrolliert rotieren, während die Hüfte stabil bleibt.")
+        );
+    }
+
+    private List<GeneratedExercise> buildFallbackMobilityReserveExercises() {
+        return List.of(
+                new GeneratedExercise("Hip Flexor Stretch", 2, 45, 0.0, 30, 3,
+                        "Halbkniestand, Hüfte sanft nach vorne schieben und Gesäß anspannen."),
+                new GeneratedExercise("Cat-Cow", 2, 15, 0.0, 30, 3,
+                        "Wirbelsäule im Vierfüßlerstand fließend beugen und strecken."),
+                new GeneratedExercise("Pigeon Pose", 2, 45, 0.0, 30, 3,
+                        "Hüfte und Gesäß in einer ruhigen, kontrollierten Position öffnen."),
+                new GeneratedExercise("Couch Stretch", 2, 45, 0.0, 30, 3,
+                        "Vorderseite von Hüfte und Oberschenkel gezielt aufdehnen."),
+                new GeneratedExercise("Ankle Dorsiflexion Wall Drill", 2, 12, 0.0, 30, 3,
+                        "Sprunggelenk kontrolliert nach vorne mobilisieren, Ferse bleibt unten."),
+                new GeneratedExercise("Thread the Needle", 2, 10, 0.0, 30, 3,
+                        "Brustwirbelsäule und Schultergürtel kontrolliert aufdrehen.")
+        );
     }
 
     // ── 1. Duplikat-Erkennung & Ersetzung ────────────────────────────────────
@@ -772,18 +1101,19 @@ public class AiService {
 
                 REGEL 11 — MOBILITÄTSBLOCK (nur wenn "includeMobilityPlan: true"):
                     → Als LETZTEN Tag einen zusätzlichen Tag hinzufügen: "dayName": "Mobilitätsblock"
-                    → Genau 6–7 Mobility-Übungen mit KONKRETEN, bekannten Namen.
-                    → sets: 1–2 | reps: 20–60 | weightKg: 0.0 | restSeconds: 30 | targetRpe: 3
+                    → Die KI erstellt GENAU 3 qualitativ hochwertige Mobility-Übungen.
+                      (Der Service ergänzt zusätzlich 3 kuratierte Fallback-Übungen.)
+                    → Nur echte Mobility-/Dehn-/Beweglichkeitsübungen — KEINE Kraftübungen.
+                    → sets: 1–2 | reps: 6–60 | weightKg: 0.0 | restSeconds: 30 | targetRpe: 3
                     → VERBOTEN: Generische Namen wie "Mobilitätsübungen", "Seitenbewegungen", "Hüftrotationen"
-                    → PFLICHT: Konkrete Namen wie "Hip Flexor Stretch", "World's Greatest Stretch",\s
-                      "Pigeon Pose", "Cat-Cow", "90/90 Hip Stretch", "Thoracic Rotation",
-                      "Couch Stretch", "Jefferson Curl", "Deep Squat Hold", "Doorway Chest Stretch"
-                    → JEDE Übung MUSS eine 2–3 Satz Ausführungsbeschreibung auf Deutsch haben:
-                      Startposition → Bewegungsausführung → Worauf achten
-                    → Beispiel description: "Im Vierfüßlerstand, Hände unter Schultern.\s
-                      Einatmen: Bauch sinkt, Kopf hebt sich (Kuh-Position).\s
-                      Ausatmen: Rücken wölbt sich nach oben, Kinn zur Brust (Katze).\s
-                      Bewegung fließend und mit dem Atem synchronisieren."
+                    → PFLICHT: Konkrete Namen wie "Couch Stretch", "Deep Squat Hold",
+                      "Thoracic Rotation", "Ankle Dorsiflexion Wall Drill", "Thread the Needle",
+                      "Adductor Rock Back", "Pigeon Pose", "90/90 Hip Stretch"
+                    → JEDE Übung MUSS eine hochwertige Beschreibung auf Deutsch haben:
+                      1. klare Startposition
+                      2. genaue Bewegungsausführung
+                      3. klarer Technikhinweis / worauf achten
+                    → Die Beschreibung soll 2–4 vollständige Sätze enthalten und praktisch umsetzbar sein.
 
             REGEL 12 — TAGESREIHENFOLGE NACH FOKUS (KRITISCH):
               ✓ PFLICHT: Der Fokus-Tag MUSS als "Tag A" (erstes Element im 'days'-Array) stehen.
@@ -983,7 +1313,8 @@ public class AiService {
             default -> "Tag A (Push): Brust → Schulter → Trizeps\nTag B (Pull): Rücken → Bizeps\nTag C (Legs): Beine";
         };
 
-        String focusSection      = buildFocusSection(focusMuscles, numDayPlans);
+        String focusSection = buildFocusSection(focusMuscles, numDayPlans, request.focusStrategy());
+        boolean isDoubleFocus = "DOUBLE_FOCUS".equalsIgnoreCase(request.focusStrategy());
         String focusOrderingRule = buildFocusOrderingRule(focusMuscles);
         String rotationLine      = buildRotationHint(daysPerWeek, numDayPlans, List.of("Tag A", "Tag B", "Tag C"));
 
@@ -1016,10 +1347,10 @@ public class AiService {
                 ? "   (Reduziert wegen Trainingsdauer " + durationStr + " → REGEL 8)\n"
                 : "   (Erfahrungslevel: " + levelLabel + " → REGEL 2)\n")
                 + "\n"
-                + "3. MUSKELGRUPPEN-AUFTEILUNG:\n"
-                + standardDist + "\n"
+                + "3. MUSKELGRUPPEN-AUFTEILUNG"
+                + (isDoubleFocus ? " (FOKUS-STRATEGIE: DOUBLE_FOCUS — FOKUS VERDOPPELN!):\n" : ":\n")
+                + (isDoubleFocus ? "" : standardDist + "\n")
                 + focusSection + "\n"
-                + "\n"
                 + "4. TAGESREIHENFOLGE (KRITISCH — REGEL 12):\n"
                 + focusOrderingRule + "\n"
                 + "\n"
@@ -1044,8 +1375,11 @@ public class AiService {
                 + (mobility
                 ? "11. MOBILITÄTSBLOCK (PFLICHT):\n"
                 + "    Als LETZTEN Tag 'Mobilitätsblock' hinzufügen (Zusatz zu den " + numDayPlans + " Trainingstagen).\n"
-                + "    5–7 Mobility-Übungen, jede mit 'description' (1–2 Sätze Ausführung auf Deutsch).\n"
-                + "    weightKg: 0.0 | sets: 1–2 | reps: 20–60 | restSeconds: 30 | targetRpe: 3\n\n"
+                + "    Die KI soll EXAKT 3 qualitative Mobility-Übungen erzeugen.\n"
+                + "    Der Service ergänzt zusätzlich 3 kuratierte Fallback-Mobility-Übungen.\n"
+                + "    Nur echte Mobility-/Dehnübungen, keine Kraftübungen.\n"
+                + "    Jede KI-Übung braucht eine starke 'description' mit Startposition, Ausführung und Technikhinweis.\n"
+                + "    weightKg: 0.0 | sets: 1–2 | reps: 6–60 | restSeconds: 30 | targetRpe: 3\n\n"
                 : "")
                 + buildExplosiveRule(rawLevel, numDayPlans)
                 + buildVariabilityHint(rawLevel, numDayPlans)
@@ -1112,8 +1446,16 @@ public class AiService {
         };
     }
 
-    private String buildFocusSection(String focusMuscles, int numDayPlans) {
-        if (focusMuscles.isBlank()) return "";
+    private String buildFocusSection(String focusMuscles, int numDayPlans, String focusStrategy) {
+        if (focusMuscles == null || focusMuscles.isBlank()) return "";
+
+        boolean isDoubleFocus = "DOUBLE_FOCUS".equalsIgnoreCase(focusStrategy);
+
+        if (isDoubleFocus) {
+            return buildDoubleFocusSection(focusMuscles, numDayPlans);
+        }
+
+        // ── BALANCED (default) — bisherige Logik ──────────────────────────────
         String fl = focusMuscles.toLowerCase();
         boolean isBein     = fl.contains("bein") || fl.contains("quad") || fl.contains("hamstring") || fl.contains("gesäß") || fl.contains("glute");
         boolean isSchulter = fl.contains("schulter") || fl.contains("deltoid");
@@ -1122,54 +1464,195 @@ public class AiService {
 
         if (numDayPlans == 3) {
             if (isBein) return """
-
+ 
                     FOKUS-REGEL BEINE (3 Tage — BEINE ZUERST als Tag A):
                     Tag A (Beine – Quad, ERSTER TAG): Kniebeuge ODER Front Squat + Beinpresse + Ausfallschritte + Wadenheben.
                     Tag B (Beine – Hinge/Posterior, VERSCHIEDENE ÜBUNGEN): Rumänisches Kreuzheben + Beinbeuger + Hip Thrust + Bulgarische Split Kniebeuge.
                     Tag C (Oberkörper): Brust, Rücken, Schulter, Arme — KEINE Bein-Übungen mehr.
                     WICHTIG: Keine einzige Übung aus Tag A darf in Tag B erscheinen!""";
             if (isSchulter) return """
-
+ 
                     FOKUS-REGEL SCHULTER (3 Tage — SCHULTER ZUERST):
                     Tag A (Schulter+Brust, ERSTER TAG): Schulterdrücken + Seitheben + Bankdrücken + Fliegenschlagen + Trizeps.
                     Tag B (Schulter+Rücken, ANDERE ÜBUNGEN): Vorgebeugtes Seitheben + Face Pulls + Latzug + Rudern + Bizeps.
                     Tag C (Beine): Kniebeuge + Beinpresse + Rumänisches KH + Ausfallschritte + Waden.""";
             if (isBrust) return """
-
+ 
                     FOKUS-REGEL BRUST (3 Tage — BRUST/PUSH ZUERST):
                     Tag A (Brust+Schulter, ERSTER TAG): Bankdrücken + Schrägdrücken + Schulterdrücken + Seitheben + Trizeps.
                     Tag B (Brust+Trizeps, ANDERE ÜBUNGEN): Schrägbankdrücken KH + Fliegenschlagen + Pec Deck + Trizeps-Variation.
                     Tag C (Rücken+Beine): Klimmzüge + Rudern + Kniebeuge + Rumänisches KH.""";
             if (isRuecken) return """
-
+ 
                     FOKUS-REGEL RÜCKEN (3 Tage — RÜCKEN/PULL ZUERST):
                     Tag A (Rücken-Breite, ERSTER TAG): Klimmzüge + Latzug (Untergriff) + Einarmiges Rudern + Hammer Curls.
                     Tag B (Rücken-Dicke, ANDERE ÜBUNGEN): Langhantelrudern + T-Bar Rudern + Seilzug-Rudern + Face Pulls + Bizeps-Curl.
                     Tag C (Brust+Beine): Bankdrücken + Schrägdrücken + Kniebeuge + Rumänisches KH.""";
         } else if (numDayPlans == 2) {
             if (isBein) return """
-
+ 
                     FOKUS-REGEL BEINE (2 Tage — BEINE ZUERST als Tag A):
                     Tag A (Beine – Quad): Kniebeuge + Beinpresse + Ausfallschritte + Wadenheben + Oberkörper ergänzend.
                     Tag B (Beine – Hinge, KOMPLETT ANDERE ÜBUNGEN): Rumänisches KH + Beinbeuger + Hip Thrust + Oberkörper.
                     KRITISCH: Tag B darf KEINE Kniebeuge, KEINE Beinpresse, KEINE Ausfallschritte enthalten!""";
             if (isSchulter) return """
-
+ 
                     FOKUS-REGEL SCHULTER (2 Tage — SCHULTER ZUERST):
                     Tag A (Schulter+Brust, ERSTER TAG): Schulterdrücken + Seitheben + Bankdrücken + Trizeps.
                     Tag B (Schulter+Rücken, ANDERE ÜBUNGEN): Vorgebeugtes Seitheben + Face Pulls + Latzug + Bizeps.""";
             if (isBrust) return """
-
+ 
                     FOKUS-REGEL BRUST (2 Tage — BRUST ZUERST):
                     Tag A (Brust+Push, ERSTER TAG): Bankdrücken + Schrägdrücken + Schulterdrücken + Trizeps.
                     Tag B (Rücken+Beine, ANDERE ÜBUNGEN): Klimmzüge + Rudern + Kniebeuge + Rumänisches KH.""";
             if (isRuecken) return """
-
+ 
                     FOKUS-REGEL RÜCKEN (2 Tage — RÜCKEN ZUERST):
                     Tag A (Rücken+Pull, ERSTER TAG): Klimmzüge + Latzug + Langhantelrudern + Bizeps.
                     Tag B (Brust+Beine, ANDERE ÜBUNGEN): Bankdrücken + Schrägdrücken + Kniebeuge + Beinbeuger.""";
         }
         return "\nFOKUS '" + focusMuscles + "': Tag A MUSS diesen Fokus priorisieren — klar stärker gewichten als andere Tage.";
+    }
+
+    private String buildDoubleFocusSection(String focusMuscles, int numDayPlans) {
+        String fl = focusMuscles.toLowerCase();
+        boolean isBein     = fl.contains("bein") || fl.contains("quad") || fl.contains("hamstring") || fl.contains("gesäß") || fl.contains("glute");
+        boolean isSchulter = fl.contains("schulter") || fl.contains("deltoid") || fl.contains("shoulder");
+        boolean isBrust    = fl.contains("brust") || fl.contains("pecto") || fl.contains("chest");
+        boolean isRuecken  = fl.contains("rücken") || fl.contains("back") || fl.contains("latiss");
+
+        if (isBein) {
+            if (numDayPlans >= 3) return """
+ 
+                    FOKUS-STRATEGIE: BEINE VERDOPPELN (DOUBLE_FOCUS — KRITISCH):
+                    ✓ PFLICHT: Exakt 2 Bein-Trainingstage + 1 Oberkörper-Ausgleichstag.
+ 
+                    Tag A – Beine Quad (ERSTER TAG, Kraft-Fokus):
+                      1. Explosive Übung (Box Jumps / Jump Squats) — bei INTERMEDIATE/ADVANCED
+                      2. Kniebeuge mit Langhantel ODER Front Squat (Hauptübung, 4–5 Sätze)
+                      3. Beinpresse (Variation mit anderer Fußstellung)
+                      4. Ausfallschritte ODER Bulgarische Split Kniebeuge
+                      5. Beinstrecker an der Maschine (Quad-Isolation)
+                      6. Wadenheben stehend
+ 
+                    Tag B – Beine Posterior/Hinge (ZWEITER BEIN-TAG, Hypertrophie-Fokus):
+                      1. Rumänisches Kreuzheben (Hauptübung — NICHT Kniebeuge!)
+                      2. Hip Thrust mit Langhantel ODER Glute Bridge
+                      3. Beinbeuger an der Maschine ODER Nordische Hamstring Curls
+                      4. Single-Leg RDL ODER Good Morning
+                      5. Abduktor Maschine ODER Cable Kickbacks
+                      6. Wadenheben sitzend (andere Variation als Tag A)
+ 
+                    Tag C – Oberkörper Ausgleich (ausgewogener Push+Pull-Tag):
+                      Brust + Rücken + Schulter + Arme — KEINE Bein-Übungen!
+                      Beispiel: Bankdrücken + Klimmzüge + Schulterdrücken + Seitheben + Trizeps + Bizeps
+ 
+                    ABSOLUTES VERBOT:
+                    ✗ Kniebeuge-Varianten NUR auf Tag A.
+                    ✗ Beinpresse NUR auf Tag A.
+                    ✗ Rumänisches KH / Hip Thrust NUR auf Tag B.
+                    ✗ Beinbeuger NUR auf Tag B.
+                    ✓ Wadenheben erlaubt auf beiden Tagen, aber VERSCHIEDENE Varianten.""";
+            else return """
+ 
+                    FOKUS-STRATEGIE: BEINE VERDOPPELN (DOUBLE_FOCUS, 2 Tage):
+                    ✓ PFLICHT: Beide Trainingstage sind Bein-Tage mit unterschiedlichem Schwerpunkt.
+ 
+                    Tag A – Beine Quad (Kraft):
+                      Kniebeuge + Beinpresse + Ausfallschritte + Beinstrecker + Wadenheben stehend
+ 
+                    Tag B – Beine Posterior (Hinge, KOMPLETT ANDERE ÜBUNGEN):
+                      Rumänisches KH + Hip Thrust + Beinbeuger + Nordische Curls ODER SL-RDL + Wadenheben sitzend
+ 
+                    ABSOLUTES VERBOT: Keine einzige Übung darf in beiden Tagen vorkommen!""";
+        }
+
+        if (isBrust) {
+            if (numDayPlans >= 3) return """
+ 
+                    FOKUS-STRATEGIE: BRUST VERDOPPELN (DOUBLE_FOCUS):
+                    ✓ PFLICHT: 2 Brust-orientierte Tage + 1 Bein/Rücken-Ausgleichstag.
+ 
+                    Tag A – Brust Kraft (schwere Compound-Übungen):
+                      Bankdrücken mit Langhantel (5×5 oder 4×6) + Schrägbankdrücken LH
+                      + Schulterdrücken mit Langhantel + Seitheben + Trizeps Dips mit Gewicht
+ 
+                    Tag B – Brust Hypertrophie (Isolations- und KH-Fokus):
+                      Schrägbankdrücken mit Kurzhanteln + Kurzhantel-Fliegenschlagen
+                      + Pec Deck Maschine ODER Low-to-High Kabelzug + Arnold Press
+                      + Overhead Trizeps Extension
+ 
+                    Tag C – Rücken + Beine (Ausgleich):
+                      Klimmzüge + Langhantelrudern + Kniebeuge + Rumänisches KH + Bizeps-Curl
+ 
+                    VERBOT: Tag A und Tag B dürfen KEINE gleichen Übungen haben!""";
+            else return """
+ 
+                    FOKUS-STRATEGIE: BRUST VERDOPPELN (DOUBLE_FOCUS, 2 Tage):
+                    Tag A – Brust Kraft: Bankdrücken LH + Schrägdrücken LH + Schulterdrücken + Trizeps
+                    Tag B – Brust Hypertrophie: Schrägdrücken KH + Fliegenschlagen + Pec Deck + Arnold Press
+                    VERBOT: Keine gleichen Übungen in beiden Tagen!""";
+        }
+
+        if (isRuecken) {
+            if (numDayPlans >= 3) return """
+ 
+                    FOKUS-STRATEGIE: RÜCKEN VERDOPPELN (DOUBLE_FOCUS):
+                    ✓ PFLICHT: 2 Rücken-Tage + 1 Brust/Beine-Ausgleichstag.
+ 
+                    Tag A – Rücken Breite (vertikales Ziehen):
+                      Klimmzüge mit Zusatzgewicht + Latzug Untergriff + Kabelzug-Rudern
+                      + Face Pulls + Incline Dumbbell Curl + Hammer Curls
+ 
+                    Tag B – Rücken Dicke (horizontales Ziehen, schwer):
+                      Langhantelrudern (Pendlay) + T-Bar Rudern + Chest Supported Row
+                      + Meadows Row + Rear Delt Maschine + Bizeps-Curl LH
+ 
+                    Tag C – Brust + Beine (Ausgleich):
+                      Bankdrücken + Schrägdrücken + Kniebeuge + Rumänisches KH + Trizeps
+ 
+                    VERBOT: Keine gleichen Zugübungen in Tag A und Tag B!""";
+            else return """
+ 
+                    FOKUS-STRATEGIE: RÜCKEN VERDOPPELN (DOUBLE_FOCUS, 2 Tage):
+                    Tag A – Rücken Breite: Klimmzüge + Latzug + Kabelzug-Rudern + Bizeps
+                    Tag B – Rücken Dicke: Langhantelrudern + T-Bar + Chest Supported Row + Bizeps-Curl LH
+                    VERBOT: Keine gleichen Zugübungen in beiden Tagen!""";
+        }
+
+        if (isSchulter) {
+            if (numDayPlans >= 3) return """
+ 
+                    FOKUS-STRATEGIE: SCHULTER VERDOPPELN (DOUBLE_FOCUS):
+                    ✓ PFLICHT: 2 Schulter-Tage + 1 Beine-Ausgleichstag.
+ 
+                    Tag A – Schulter Drücken (vertikale Kraft):
+                      Schulterdrücken mit Langhantel ODER Push Press + Arnold Press
+                      + Seitheben mit Kurzhanteln + Schrägbankdrücken (Brustergänzung)
+                      + Schädelbrechter + Trizeps Pushdown
+ 
+                    Tag B – Schulter Isolation (Seite & Hinten):
+                      Seitheben am Kabelzug + Maschinen-Seitheben + Vorgebeugtes Seitheben
+                      + Face Pulls + W-Raises + Klimmzüge ODER Latzug (Rücken-Ergänzung)
+                      + Hammer Curls
+ 
+                    Tag C – Beine (Ausgleich):
+                      Kniebeuge + Beinpresse + Rumänisches KH + Beinbeuger + Wadenheben
+ 
+                    VERBOT: Keine gleichen Schulter-Übungen in Tag A und Tag B!""";
+            else return """
+ 
+                    FOKUS-STRATEGIE: SCHULTER VERDOPPELN (DOUBLE_FOCUS, 2 Tage):
+                    Tag A – Schulter Kraft: Schulterdrücken + Arnold Press + Seitheben + Trizeps
+                    Tag B – Schulter Isolation: Seitheben Kabelzug + Face Pulls + Vorgebeugtes Seitheben + Klimmzüge
+                    VERBOT: Keine gleichen Übungen in beiden Tagen!""";
+        }
+
+        // Generischer DOUBLE_FOCUS-Fallback für andere Fokusgruppen
+        return "\nFOKUS-STRATEGIE: DOPPEL-FOKUS für '" + focusMuscles + "':\n"
+                + "Tag A UND Tag B MÜSSEN beide den Fokus '" + focusMuscles + "' trainieren,\n"
+                + "jedoch mit VOLLSTÄNDIG unterschiedlichen Übungen (Kraft vs. Hypertrophie).\n"
+                + (numDayPlans >= 3 ? "Tag C: Ausgleichstag — andere Muskelgruppen.\n" : "");
     }
 
     private String buildExplosiveRule(String level, int numDayPlans) {
