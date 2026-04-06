@@ -36,10 +36,6 @@ public class AppUser {
     @Enumerated(EnumType.STRING)
     private FitnessLevel fitnessLevel = FitnessLevel.BEGINNER;
 
-    /**
-     * Persönliche Motivations-Botschaft des Users.
-     * Wird auf dem Dashboard angezeigt.
-     */
     @Column(length = 300)
     private String motivationalMessage;
 
@@ -50,7 +46,7 @@ public class AppUser {
     private boolean enabled = true;
 
     public enum FitnessLevel { BEGINNER, INTERMEDIATE, ADVANCED }
-    public enum Role { USER, ADMIN }
+    public enum Role { USER, PREMIUM, ADMIN }
 
     // ---- Constructors ----
     public AppUser() {}

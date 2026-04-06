@@ -68,6 +68,16 @@ public class TrainingPlan {
     @Column(name = "next_feedback_available_at")
     private LocalDateTime nextFeedbackAvailableAt;
 
+    @Column(name = "generated_by_ai", columnDefinition = "boolean default false")
+    private Boolean generatedByAi = false;
+
+    public boolean isGeneratedByAi() {
+        return generatedByAi != null && generatedByAi;
+    }
+    public void setGeneratedByAi(boolean generatedByAi) {
+        this.generatedByAi = generatedByAi;
+    }
+
     // ---- Constructors ----
     public TrainingPlan() {}
 

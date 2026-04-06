@@ -25,19 +25,22 @@ public class TrainingService {
     private final UserRepository userRepo;
     private final RpeAdjustmentService rpeService;
     private final AiService aiService;
+    private final PlanLimitService planLimitService;
 
     public TrainingService(TrainingPlanRepository planRepo,
                            PlannedExerciseRepository exerciseRepo,
                            TrainingSessionRepository sessionRepo,
                            UserRepository userRepo,
                            RpeAdjustmentService rpeService,
-                           AiService aiService) {
+                           AiService aiService,
+                           PlanLimitService planLimitService) {
         this.planRepo     = planRepo;
         this.exerciseRepo = exerciseRepo;
         this.sessionRepo  = sessionRepo;
         this.userRepo     = userRepo;
         this.rpeService   = rpeService;
         this.aiService    = aiService;
+        this.planLimitService  = planLimitService;
     }
 
     // ===================== PLAN ERSTELLEN =====================
@@ -65,6 +68,9 @@ public class TrainingService {
         AppUser user = userRepo.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User nicht gefunden: " + userId));
 
+        // ── Monatliches Limit prüfen ─────────────────────────────────
+        planLimitService.checkAiPlanLimit(user);
+
         AiService.GeneratedPlan generated = aiService.generateTrainingPlan(user, req);
         if (generated.days().isEmpty()) {
             throw new IllegalStateException("KI konnte keinen Plan erstellen.");
@@ -73,6 +79,7 @@ public class TrainingService {
         TrainingPlan plan = new TrainingPlan(req.planName(), user);
         plan.setDescription(buildPlanDescription(req, generated));
         plan.setPlanDurationWeeks(4);
+        plan.setGeneratedByAi(true);
 
         int order = 0;
         for (AiService.GeneratedDay day : generated.days()) {
@@ -82,7 +89,6 @@ public class TrainingService {
                         genEx.weightKg(), genEx.restSeconds(), genEx.targetRpe());
 
                 PlannedExercise pe = buildExercise(exInput, plan, order++, day.dayName());
-                // NEU: Beschreibung aus KI-Antwort übernehmen (wichtig für Mobility-Übungen)
                 if (genEx.description() != null && !genEx.description().isBlank()) {
                     pe.setDescription(genEx.description());
                 }
@@ -94,7 +100,6 @@ public class TrainingService {
         log.info("KI-Plan gespeichert: id={}, Tage={}", saved.getId(), generated.days().size());
         return saved;
     }
-
     // ===================== FEEDBACK VERFÜGBARKEIT =====================
 
     @Transactional(readOnly = true)
@@ -211,14 +216,14 @@ public class TrainingService {
 
     @Transactional(readOnly = true)
     public TrainingPlan getPlanForUser(Long planId, Long userId) {
-        TrainingPlan plan = planRepo.findById(planId)
+        TrainingPlan plan = planRepo.findByIdWithExercises(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("Plan nicht gefunden: " + planId));
         if (!plan.getUser().getId().equals(userId)) throw new SecurityException("Zugriff verweigert");
         return plan;
     }
 
     public List<TrainingPlan> getUserPlans(Long userId) {
-        List<TrainingPlan> plans = planRepo.findByUserId(userId);
+        List<TrainingPlan> plans = planRepo.findByUserIdWithExercises(userId); // ← ÄNDERN
         plans.forEach(p -> {
             if (p.isActive() && p.getActiveUntil() != null
                     && LocalDateTime.now().isAfter(p.getActiveUntil())) {
@@ -229,10 +234,6 @@ public class TrainingService {
         return plans;
     }
 
-    @Transactional(readOnly = true)
-    public List<TrainingSession> getSessionHistory(Long userId) {
-        return sessionRepo.findByUserIdOrderBySessionDateDesc(userId);
-    }
 
     // ===================== HILFSMETHODEN =====================
 
@@ -273,4 +274,10 @@ public class TrainingService {
             default -> goal;
         };
     }
+
+    @Transactional(readOnly = true)
+    public List<TrainingSession> getSessionHistory(Long userId) {
+        return sessionRepo.findByUserIdOrderBySessionDateDesc(userId);
+    }
+
 }

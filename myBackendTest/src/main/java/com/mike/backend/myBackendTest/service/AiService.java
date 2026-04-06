@@ -13,9 +13,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Service
 public class AiService {
@@ -38,10 +36,108 @@ public class AiService {
 
     public record GeneratedDay(String dayName, String focus, List<GeneratedExercise> exercises) {}
     public record GeneratedPlan(String planName, String description, List<GeneratedDay> days) {}
-
     public record GeneratedExercise(String exerciseName, int sets, int reps,
                                     double weightKg, int restSeconds, int targetRpe,
                                     String description) {}
+
+    // =========================================================================
+    // EXERCISE POOL — strukturierte Übungsdatenbank nach Bewegungsmuster
+    // =========================================================================
+
+    private static final Map<String, List<String>> EXERCISE_POOL;
+    static {
+        Map<String, List<String>> pool = new LinkedHashMap<>();
+        // ── Unterkörper ───────────────────────────────────────────────────────
+        pool.put("squat", List.of(
+                "Kniebeuge mit Langhantel", "Front Squat mit Langhantel", "Goblet Squat mit Kurzhantel",
+                "Box Squat", "Hackenschmidt-Kniebeuge", "Zercher Kniebeuge", "Sumo Kniebeuge",
+                "Pause Kniebeuge", "High Bar Kniebeuge", "Low Bar Kniebeuge",
+                "Kniebeuge mit Kettlebell", "Anderson Kniebeuge"));
+        pool.put("hinge", List.of(
+                "Rumänisches Kreuzheben", "Kreuzheben", "Sumo Kreuzheben", "Hip Thrust mit Langhantel",
+                "Good Morning", "Single-Leg RDL", "Trap Bar Kreuzheben", "Stiff-Leg Kreuzheben",
+                "45°-Rückenstrecker", "Hyperextension", "Snatch Grip Kreuzheben", "Defizit Kreuzheben"));
+        pool.put("lunge", List.of(
+                "Ausfallschritte mit Kurzhanteln", "Bulgarische Split Kniebeuge",
+                "Ausfallschritte laufend", "Reverse Lunge mit Kurzhanteln",
+                "Seitliche Ausfallschritte", "Step-ups auf Kasten",
+                "Schrittkniebeuge mit Langhantel", "Walking Lunges mit Kurzhanteln",
+                "Einbeinige Kniebeuge auf Kasten", "Reverse Lunge mit Langhantel"));
+        pool.put("explosive_legs", List.of(
+                "Box Jumps", "Jump Squats", "Broad Jumps", "Depth Jumps",
+                "Power Clean", "Hang Clean", "Kettlebell Swing", "Medball Slam",
+                "Laterale Sprünge", "Einbeinige Box Jumps", "Bounding", "Trap Bar Jump",
+                "Hang Snatch", "Split Jumps"));
+        pool.put("quad_machine", List.of(
+                "Beinpresse", "Beinstrecker an der Maschine", "Beinpresse enge Fußstellung",
+                "Beinpresse weite Fußstellung", "Beinpresse hohe Fußstellung", "Pendulum Kniebeuge"));
+        pool.put("hamstring_iso", List.of(
+                "Beinbeuger an der Maschine", "Beinbeuger liegend", "Nordische Hamstring Curls",
+                "Beinbeuger sitzend", "Stability Ball Leg Curl", "Beinbeuger stehend"));
+        pool.put("glute", List.of(
+                "Hip Thrust", "Glute Bridge", "Donkey Kicks am Kabelzug",
+                "Abduktor Maschine", "Clamshells mit Band", "Cable Kickbacks"));
+        pool.put("calf", List.of(
+                "Wadenheben stehend", "Wadenheben sitzend", "Einbeiniges Wadenheben",
+                "Wadenheben an der Maschine", "Donkey Calf Raises", "Seated Calf Raises",
+                "Wadenheben auf Treppe"));
+        // ── Drücken / Push ────────────────────────────────────────────────────
+        pool.put("horizontal_push", List.of(
+                "Bankdrücken mit Langhantel", "Bankdrücken mit Kurzhanteln",
+                "Schrägbankdrücken mit Langhantel", "Schrägbankdrücken mit Kurzhanteln",
+                "Flachbankdrücken am Kabelzug", "Push-ups auf Ringen",
+                "Guillotine Press", "Reverse Grip Bankdrücken",
+                "Close Grip Bankdrücken", "Decline Bankdrücken"));
+        pool.put("vertical_push", List.of(
+                "Schulterdrücken mit Langhantel", "Schulterdrücken mit Kurzhanteln",
+                "Arnold Press", "Push Press", "Z-Press sitzend", "Landmine Press",
+                "Frontdrücken stehend", "Bradford Press", "Dumbbell Shoulder Press alternierend"));
+        pool.put("chest_iso", List.of(
+                "Kurzhantel-Fliegenschlagen", "Kabelzug-Fliegenschlagen",
+                "Pec Deck Maschine", "Kabelzug Cross-over", "Low-to-High Kabelzug",
+                "High-to-Low Kabelzug", "Svend Press"));
+        pool.put("dips_push", List.of(
+                "Dips", "Trizeps Dips mit Zusatzgewicht", "Ring Dips", "Chest Dips"));
+        pool.put("side_delt", List.of(
+                "Seitheben mit Kurzhanteln", "Seitheben am Kabelzug",
+                "Vorgebeugtes Seitheben", "Maschinen-Seitheben", "Upright Row",
+                "Seitheben liegend", "Kabelzug-Seitheben einseitig"));
+        pool.put("triceps", List.of(
+                "Trizeps Pushdown am Kabelzug", "Overhead Trizeps Extension KH",
+                "Schädelbrechter mit Langhantel", "Schädelbrechter mit Kurzhanteln",
+                "Kickbacks mit Kurzhantel", "Diamond Push-ups",
+                "Trizeps Pushdown eng", "Trizeps-Extension am Kabelzug überkopf",
+                "JM Press", "Nahgriff Bankdrücken"));
+        // ── Ziehen / Pull ─────────────────────────────────────────────────────
+        pool.put("vertical_pull", List.of(
+                "Klimmzüge", "Klimmzüge mit Zusatzgewicht", "Latzug am Kabelzug",
+                "Latzug eng Griff", "Latzug weit Griff", "Latzug Untergriff",
+                "Straight-Arm Pulldown", "Kneeling Pulldown", "Ringklimmzüge",
+                "Assistierte Klimmzüge", "Latzug Untergriff eng"));
+        pool.put("horizontal_pull", List.of(
+                "Langhantelrudern", "Einarmiges Kurzhantelrudern", "Seilzug-Rudern sitzend",
+                "T-Bar Rudern", "Maschinenrudern", "Pendlay Rudern", "Meadows Row",
+                "Kabelzug-Rudern weit", "Chest Supported Row", "Seal Row"));
+        pool.put("rear_delt", List.of(
+                "Face Pulls am Kabelzug", "Vorgebeugtes Seitheben", "Reverse Flyes",
+                "Band Pull-Aparts", "Rear Delt Maschine", "W-Raises", "Y-T-W Übung"));
+        pool.put("biceps", List.of(
+                "Bizeps-Curl mit Langhantel", "Bizeps-Curl mit Kurzhanteln",
+                "Hammer Curls mit Kurzhanteln", "Konzentrations Curls",
+                "Kabelzug-Curl", "Reverse Curls", "Preacher Curl",
+                "Spider Curls", "Incline Dumbbell Curl", "Zottman Curl"));
+        // ── Core ──────────────────────────────────────────────────────────────
+        pool.put("core_stability", List.of(
+                "Plank", "Ab Wheel Rollout", "Dead Bug", "Hollow Hold",
+                "Pallof Press", "Suitcase Carry", "Farmers Walk"));
+        pool.put("core_flexion", List.of(
+                "Crunches", "Sit-ups", "Kabelzug-Crunch", "Beinheben hängend",
+                "V-Ups", "Toe Touches", "Dragon Flag"));
+        pool.put("core_rotation", List.of(
+                "Russian Twists", "Woodchopper am Kabelzug", "Landmine Rotation",
+                "Medball Rotational Throw", "Anti-Rotation Press"));
+        EXERCISE_POOL = Collections.unmodifiableMap(pool);
+    }
 
     // =========================================================================
     // METHODE 1: Erklärung nach Feedback
@@ -79,14 +175,15 @@ public class AiService {
             if (rawJson != null && !rawJson.isBlank()) {
                 GeneratedPlan parsed = parseGeneratedPlan(rawJson);
                 if (parsed != null && !parsed.days().isEmpty()) {
-                    // ── NEU: Tagesreihenfolge nach Fokus korrigieren ──────────
                     GeneratedPlan reordered = reorderGeneratedPlanByFocus(parsed, request);
-                    long total = reordered.days().stream().mapToLong(d -> d.exercises().size()).sum();
-                    log.info("KI-Plan: '{}' mit {} Tagen, {} Uebungen", reordered.planName(), reordered.days().size(), total);
-                    return reordered;
+                    // ── NEU: Post-Processing — Duplikate beheben & Qualität sichern ──
+                    GeneratedPlan validated = validateAndEnrichPlan(reordered, request, user);
+                    long total = validated.days().stream().mapToLong(d -> d.exercises().size()).sum();
+                    log.info("KI-Plan: '{}' mit {} Tagen, {} Übungen", validated.planName(), validated.days().size(), total);
+                    return validated;
                 }
             }
-            log.warn("KI lieferte keinen verwertbaren Plan -> Fallback");
+            log.warn("KI lieferte keinen verwertbaren Plan → Fallback");
         } catch (Exception e) {
             log.error("Fehler bei KI-Plan-Generierung: {}", e.getMessage());
         }
@@ -94,76 +191,412 @@ public class AiService {
     }
 
     // =========================================================================
-    // NEU: Tagesreihenfolge nach Fokus korrigieren (KI-Output + Fallback)
+    // POST-PROCESSING: Qualitätsvalidierung & Duplikat-Behebung
     // =========================================================================
 
     /**
-     * Stellt sicher, dass Tag A immer der Fokus-Tag ist.
-     * Verschiebt den passenden Tag an Position 0, behält Mobilitätsblock am Ende.
+     * Validiert und bereichert den generierten Plan:
+     *  1. Duplikate über Tage hinweg erkennen & durch Pool-Alternativen ersetzen
+     *  2. Explosive Übung auf Bein-Tagen sicherstellen (INTERMEDIATE/ADVANCED)
+     *  3. Übungsanzahl pro Tag prüfen & ggf. trimmen
      */
-    private GeneratedPlan reorderGeneratedPlanByFocus(GeneratedPlan plan, GeneratePlanRequest request) {
-        if (plan.days().size() <= 1) return plan;
+    private GeneratedPlan validateAndEnrichPlan(GeneratedPlan plan,
+                                                GeneratePlanRequest request,
+                                                AppUser user) {
+        if (plan == null || plan.days().isEmpty()) return plan;
 
-        String focusMuscles = resolveFocusMuscles(request);
-        if (focusMuscles.isBlank()) return plan; // kein Fokus → keine Umordnung
+        GeneratedPlan result = deduplicateAcrossDays(plan);
 
-        List<GeneratedDay> days = new ArrayList<>(plan.days());
+        String level = resolveRawLevel(request, user);
+        if ("INTERMEDIATE".equals(level) || "ADVANCED".equals(level)) {
+            result = ensureExplosiveOnLegDays(result);
+        }
 
-        // Mobilitätsblock immer ans Ende (wird zuerst rausgenommen)
-        GeneratedDay mobilityDay = null;
-        List<GeneratedDay> trainingDays = new ArrayList<>();
-        for (GeneratedDay day : days) {
+        result = ensureExerciseCount(result, request, user);
+        return result;
+    }
+
+    // ── 1. Duplikat-Erkennung & Ersetzung ────────────────────────────────────
+
+    /**
+     * Geht alle Trainingstage sequenziell durch.
+     * Jede Übung, die in einem früheren Tag bereits vorkommt, wird durch eine
+     * Pool-Alternative aus derselben Bewegungsmuster-Kategorie ersetzt.
+     */
+    private GeneratedPlan deduplicateAcrossDays(GeneratedPlan plan) {
+        Set<String> usedNormalized = new LinkedHashSet<>();
+        List<GeneratedDay> fixedDays = new ArrayList<>();
+        int duplicatesFixed = 0;
+
+        for (GeneratedDay day : plan.days()) {
             if ("Mobilitätsblock".equalsIgnoreCase(day.dayName())) {
-                mobilityDay = day;
-            } else {
-                trainingDays.add(day);
+                fixedDays.add(day);
+                continue;
             }
+
+            List<GeneratedExercise> fixedExercises = new ArrayList<>();
+            for (GeneratedExercise exercise : day.exercises()) {
+                String normalized = normalizeExerciseName(exercise.exerciseName());
+                if (usedNormalized.contains(normalized)) {
+                    String alternative = findAlternativeExercise(exercise.exerciseName(), usedNormalized);
+                    if (alternative != null) {
+                        log.info("Duplikat '{}' in {} → ersetzt durch '{}'",
+                                exercise.exerciseName(), day.dayName(), alternative);
+                        fixedExercises.add(new GeneratedExercise(
+                                alternative, exercise.sets(), exercise.reps(),
+                                exercise.weightKg(), exercise.restSeconds(),
+                                exercise.targetRpe(), exercise.description()));
+                        usedNormalized.add(normalizeExerciseName(alternative));
+                        duplicatesFixed++;
+                    } else {
+                        // Kein Ersatz gefunden → Übung trotzdem behalten
+                        fixedExercises.add(exercise);
+                        log.warn("Kein Pool-Ersatz für Duplikat '{}' gefunden — behalte Original", exercise.exerciseName());
+                    }
+                } else {
+                    fixedExercises.add(exercise);
+                    usedNormalized.add(normalized);
+                }
+            }
+            fixedDays.add(new GeneratedDay(day.dayName(), day.focus(), fixedExercises));
         }
 
-        int priorityIndex = findFocusDayIndex(trainingDays, focusMuscles);
+        if (duplicatesFixed > 0) log.info("Post-Processing: {} Duplikat(e) behoben", duplicatesFixed);
+        return new GeneratedPlan(plan.planName(), plan.description(), fixedDays);
+    }
 
-        if (priorityIndex > 0) {
-            // Fokus-Tag immer an den Anfang (Tag A)
-            GeneratedDay focusDay = trainingDays.remove(priorityIndex);
-            trainingDays.add(0, focusDay);
-            log.info("Tagesreihenfolge angepasst: '{}' → Tag A (Fokus: {})",
-                    focusDay.dayName(), focusMuscles);
+    // ── 2. Explosive Pflicht auf Bein-Tagen ──────────────────────────────────
+
+    /**
+     * Stellt sicher, dass Bein-Tage bei INTERMEDIATE/ADVANCED eine explosive Übung
+     * als ERSTE Übung besitzen.
+     */
+    private GeneratedPlan ensureExplosiveOnLegDays(GeneratedPlan plan) {
+        List<GeneratedDay> days = new ArrayList<>();
+        for (GeneratedDay day : plan.days()) {
+            if ("Mobilitätsblock".equalsIgnoreCase(day.dayName())) {
+                days.add(day);
+                continue;
+            }
+            if (!isLegDay(day)) {
+                days.add(day);
+                continue;
+            }
+
+            List<GeneratedExercise> exercises = new ArrayList<>(day.exercises());
+
+            // Explosive Übung suchen
+            int explosiveIndex = -1;
+            for (int i = 0; i < exercises.size(); i++) {
+                if ("explosive_legs".equals(findMovementCategory(exercises.get(i).exerciseName()))) {
+                    explosiveIndex = i;
+                    break;
+                }
+            }
+
+            if (explosiveIndex < 0) {
+                // Keine explosive Übung → hinzufügen
+                GeneratedExercise explosive = new GeneratedExercise("Box Jumps", 3, 6, 0.0, 90, 8, "");
+                exercises.add(0, explosive);
+                if (exercises.size() > 8) exercises.remove(exercises.size() - 1);
+                log.info("Explosive Übung auf Bein-Tag '{}' ergänzt", day.dayName());
+            } else if (explosiveIndex > 0) {
+                // Explosive Übung an erste Position verschieben
+                GeneratedExercise explosive = exercises.remove(explosiveIndex);
+                exercises.add(0, explosive);
+                log.info("Explosive Übung '{}' → Position 1 in '{}'", explosive.exerciseName(), day.dayName());
+            }
+
+            days.add(new GeneratedDay(day.dayName(), day.focus(), exercises));
         }
+        return new GeneratedPlan(plan.planName(), plan.description(), days);
+    }
 
-        // Tage nach dem Umsortieren zu Tag A / Tag B / Tag C umbenennen
-        List<GeneratedDay> renamed = renameDaysSequentially(trainingDays);
+    // ── 3. Übungsanzahl sicherstellen ─────────────────────────────────────────
 
-        // Mobilitätsblock wieder ans Ende
-        if (mobilityDay != null) renamed.add(mobilityDay);
+    private GeneratedPlan ensureExerciseCount(GeneratedPlan plan, GeneratePlanRequest request, AppUser user) {
+        String level = resolveRawLevel(request, user);
+        int expected = calcExercisesPerDayWithDuration(level, request.sessionDurationMinutes());
 
-        return new GeneratedPlan(plan.planName(), plan.description(), renamed);
+        List<GeneratedDay> days = new ArrayList<>();
+        for (GeneratedDay day : plan.days()) {
+            if ("Mobilitätsblock".equalsIgnoreCase(day.dayName())) {
+                days.add(day);
+                continue;
+            }
+            List<GeneratedExercise> exercises = new ArrayList<>(day.exercises());
+            if (exercises.size() > expected + 1) {
+                log.info("Tag '{}': {} Übungen → trimme auf {}", day.dayName(), exercises.size(), expected);
+                exercises = exercises.subList(0, expected);
+            }
+            days.add(new GeneratedDay(day.dayName(), day.focus(), exercises));
+        }
+        return new GeneratedPlan(plan.planName(), plan.description(), days);
+    }
+
+    // =========================================================================
+    // EXERCISE POOL: Kategorie-Erkennung & Alternative finden
+    // =========================================================================
+
+    /**
+     * Normalisiert einen Übungsnamen auf seinen Kern-Bewegungstyp.
+     * Z.B.: "Kniebeuge mit Langhantel" → "kniebeuge",
+     *       "Rumänisches Kreuzheben" → "rdl"
+     */
+    private String normalizeExerciseName(String name) {
+        if (name == null) return "";
+        String n = name.toLowerCase().trim();
+
+        // Kern-Bewegungen mappen (Reihenfolge wichtig: spezifischere zuerst)
+        if (n.contains("rumänisch") || n.contains("romanian") || (n.contains("rdl") && n.contains("single"))) return "rdl";
+        if (n.contains("hip thrust") || n.contains("glute bridge")) return "hip_thrust";
+        if (n.contains("bulgarisch") || n.contains("split kniebeuge")) return "split_squat";
+        if (n.contains("kniebeuge") || n.contains("squat") || n.contains("goblet")) return "kniebeuge";
+        if (n.contains("kreuzheben") || n.contains("deadlift")) return "kreuzheben";
+        if (n.contains("good morning")) return "good_morning";
+        if (n.contains("ausfallschritt") || n.contains("lunge") || n.contains("step-up")) return "ausfallschritte";
+        if (n.contains("beinpresse")) return "beinpresse";
+        if (n.contains("beinstrecker")) return "beinstrecker";
+        if (n.contains("beinbeuger") || n.contains("hamstring curl") || n.contains("leg curl")) return "beinbeuger";
+        if (n.contains("nordisch")) return "nordische_hamstring";
+        if (n.contains("wadenheben") || n.contains("calf raise")) return "wadenheben";
+        if (n.contains("box jump")) return "box_jumps";
+        if (n.contains("jump squat")) return "jump_squats";
+        if (n.contains("broad jump")) return "broad_jumps";
+        if (n.contains("depth jump")) return "depth_jumps";
+        if (n.contains("power clean")) return "power_clean";
+        if (n.contains("hang clean")) return "hang_clean";
+        if (n.contains("kettlebell swing")) return "kettlebell_swing";
+        if (n.contains("medball")) return "medball";
+        if (n.contains("schrägbankdrücken") || n.contains("incline bench")) return "schrägbankdrücken";
+        if (n.contains("bankdrücken") || n.contains("bench press")) return "bankdrücken";
+        if (n.contains("schulterdrücken") || n.contains("military press") || n.contains("overhead press") || n.contains("arnold")) return "schulterdrücken";
+        if (n.contains("push press") || n.contains("z-press") || n.contains("landmine press")) return "push_press_variation";
+        if (n.contains("dips") && !n.contains("trizeps")) return "dips";
+        if (n.contains("fliegenschlagen") || n.contains("flyes") || n.contains("pec deck") || n.contains("cross-over")) return "fliegenschlagen";
+        if (n.contains("seitheben")) return "seitheben";
+        if (n.contains("upright row")) return "upright_row";
+        if (n.contains("schädelbrechter") || n.contains("skull crusher")) return "schädelbrechter";
+        if (n.contains("trizeps") || n.contains("tricep")) return "trizeps_isolation";
+        if (n.contains("klimmzüge") || n.contains("pull-up") || n.contains("pullup") || n.contains("chin-up")) return "klimmzüge";
+        if (n.contains("latzug") || n.contains("lat pulldown")) return "latzug";
+        if (n.contains("langhantelrudern") || n.contains("pendlay") || n.contains("t-bar")) return "langhantelrudern";
+        if (n.contains("einarmig") && n.contains("rudern")) return "einarmiges_rudern";
+        if (n.contains("seilzug") && n.contains("rudern")) return "seilzug_rudern";
+        if (n.contains("maschinenrudern") || n.contains("chest supported row") || n.contains("seal row")) return "maschinenrudern";
+        if (n.contains("face pull")) return "face_pulls";
+        if (n.contains("reverse fly") || n.contains("vorgebeugt") && n.contains("seitheben")) return "rear_delt_fly";
+        if (n.contains("band pull")) return "band_pull_apart";
+        if (n.contains("hammer curl")) return "hammer_curls";
+        if (n.contains("preacher") || n.contains("spider curl") || n.contains("konzentration")) return "isolation_curl";
+        if (n.contains("reverse curl")) return "reverse_curls";
+        if (n.contains("bizeps") || n.contains("curl")) return "bizeps_curl";
+        if (n.contains("plank")) return "plank";
+        if (n.contains("ab wheel") || n.contains("rollout")) return "ab_rollout";
+        if (n.contains("dead bug") || n.contains("hollow hold")) return "core_antiextension";
+        if (n.contains("crunch")) return "crunch";
+        if (n.contains("sit-up") || n.contains("sit up")) return "sit_up";
+        if (n.contains("beinheben")) return "beinheben";
+        if (n.contains("russian twist")) return "russian_twist";
+        if (n.contains("woodchopper") || n.contains("rotation")) return "core_rotation";
+        return n.replaceAll("\\s+(mit|am|an der|mit dem|auf dem|auf der)\\s+.*", "").trim();
     }
 
     /**
-     * Gibt den Index des Trainingstages zurück, der am besten zum Fokus passt.
-     * Gibt 0 zurück wenn der Fokus-Tag bereits an erster Stelle ist oder nicht erkannt wird.
+     * Ordnet eine Übung einer Bewegungsmuster-Kategorie im EXERCISE_POOL zu.
      */
-    private int findFocusDayIndex(List<GeneratedDay> days, String focusMuscles) {
-        if (days.isEmpty()) return 0;
+    private String findMovementCategory(String exerciseName) {
+        if (exerciseName == null) return null;
+        String n = exerciseName.toLowerCase();
 
-        String fl = focusMuscles.toLowerCase();
-        FocusType focus = detectFocusType(fl);
+        // Reihenfolge: spezifisch → allgemein
+        if (n.contains("box jump") || n.contains("jump squat") || n.contains("broad jump") ||
+                n.contains("depth jump") || n.contains("power clean") || n.contains("hang clean") ||
+                n.contains("kettlebell swing") || n.contains("medball") || n.contains("bounding") ||
+                n.contains("hang snatch") || n.contains("split jump") || n.contains("trap bar jump"))
+            return "explosive_legs";
+        if (n.contains("bulgarisch") || n.contains("split kniebeuge") ||
+                n.contains("ausfallschritt") || n.contains("lunge") || n.contains("step-up"))
+            return "lunge";
+        if ((n.contains("kniebeuge") || n.contains("squat") || n.contains("goblet") || n.contains("hackenschmidt"))
+                && !n.contains("jump") && !n.contains("split"))
+            return "squat";
+        if (n.contains("rumänisch") || n.contains("hip thrust") || n.contains("good morning") ||
+                n.contains("single-leg rdl") || (n.contains("kreuzheben") && !n.contains("sumo")) ||
+                n.contains("rückenstrecker") || n.contains("hyperextension"))
+            return "hinge";
+        if (n.contains("sumo kreuzheben") || n.contains("trap bar kreuzheben"))
+            return "hinge";
+        if (n.contains("beinpresse") || n.contains("beinstrecker"))
+            return "quad_machine";
+        if (n.contains("beinbeuger") || n.contains("nordisch") || n.contains("leg curl"))
+            return "hamstring_iso";
+        if (n.contains("hip thrust") || n.contains("glute bridge") || n.contains("donkey kick") ||
+                n.contains("abduktor") || n.contains("kickback") && !n.contains("trizeps") || n.contains("clamshell"))
+            return "glute";
+        if (n.contains("wadenheben") || n.contains("calf raise") || n.contains("donkey calf"))
+            return "calf";
+        if (n.contains("schrägbankdrücken") || n.contains("incline"))
+            return "horizontal_push";
+        if ((n.contains("bankdrücken") || n.contains("bench press")) && !n.contains("schulter"))
+            return "horizontal_push";
+        if (n.contains("dips") && !n.contains("trizeps"))
+            return "dips_push";
+        if (n.contains("schulterdrücken") || n.contains("military press") || n.contains("overhead press") ||
+                n.contains("arnold press") || n.contains("push press") || n.contains("z-press") ||
+                n.contains("frontdrücken") || n.contains("landmine press"))
+            return "vertical_push";
+        if (n.contains("fliegenschlagen") || n.contains("flyes") || n.contains("pec deck") || n.contains("cross-over"))
+            return "chest_iso";
+        if (n.contains("seitheben") || n.contains("upright row"))
+            return "side_delt";
+        if (n.contains("schädelbrechter") || n.contains("skull crusher") || n.contains("trizeps") ||
+                n.contains("pushdown") || n.contains("overhead extension") || n.contains("kickback") ||
+                n.contains("jm press") || n.contains("nahgriff"))
+            return "triceps";
+        if (n.contains("klimmzüge") || n.contains("pull-up") || n.contains("latzug") ||
+                n.contains("pulldown") || n.contains("straight-arm"))
+            return "vertical_pull";
+        if (n.contains("rudern") || n.contains("row") || n.contains("pendlay") || n.contains("t-bar"))
+            return "horizontal_pull";
+        if (n.contains("face pull") || n.contains("reverse fly") || (n.contains("vorgebeugt") && n.contains("seitheben")) ||
+                n.contains("band pull") || n.contains("w-raise") || n.contains("y-t-w"))
+            return "rear_delt";
+        if (n.contains("curl") || n.contains("bizeps") || n.contains("preacher") || n.contains("spider curl"))
+            return "biceps";
+        if (n.contains("plank") || n.contains("ab wheel") || n.contains("dead bug") ||
+                n.contains("hollow hold") || n.contains("pallof") || n.contains("suitcase carry"))
+            return "core_stability";
+        if (n.contains("crunch") || n.contains("sit-up") || n.contains("beinheben") ||
+                n.contains("v-up") || n.contains("dragon flag"))
+            return "core_flexion";
+        if (n.contains("russian twist") || n.contains("woodchopper") || n.contains("rotation"))
+            return "core_rotation";
+        return null;
+    }
 
-        for (int i = 0; i < days.size(); i++) {
-            String dayFocus = (days.get(i).focus() + " " + days.get(i).dayName()).toLowerCase();
-            if (matchesFocusType(dayFocus, focus)) {
-                return i;
-            }
+    /**
+     * Liefert eine noch nicht verwendete Alternative aus derselben oder einer
+     * verwandten Pool-Kategorie.
+     */
+    private String findAlternativeExercise(String originalName, Set<String> usedNormalized) {
+        String category = findMovementCategory(originalName);
+        if (category == null) category = guessRelatedCategory(originalName);
+        if (category == null) return null;
+
+        String alternative = pickFromPool(category, usedNormalized);
+        if (alternative != null) return alternative;
+
+        // Pool erschöpft → verwandte Kategorie versuchen
+        String related = getRelatedCategory(category);
+        if (related != null) return pickFromPool(related, usedNormalized);
+        return null;
+    }
+
+    private String pickFromPool(String category, Set<String> usedNormalized) {
+        List<String> pool = EXERCISE_POOL.get(category);
+        if (pool == null) return null;
+        for (String candidate : pool) {
+            if (!usedNormalized.contains(normalizeExerciseName(candidate))) return candidate;
+        }
+        return null;
+    }
+
+    private String guessRelatedCategory(String exerciseName) {
+        String n = exerciseName.toLowerCase();
+        if (n.contains("bein") || n.contains("knie") || n.contains("quad")) return "squat";
+        if (n.contains("brust")) return "horizontal_push";
+        if (n.contains("rücken")) return "horizontal_pull";
+        if (n.contains("schulter")) return "vertical_push";
+        if (n.contains("bizeps") || n.contains("arm")) return "biceps";
+        if (n.contains("trizeps")) return "triceps";
+        if (n.contains("bauch") || n.contains("core")) return "core_stability";
+        return null;
+    }
+
+    private String getRelatedCategory(String category) {
+        return switch (category) {
+            case "squat"           -> "lunge";
+            case "lunge"           -> "squat";
+            case "hinge"           -> "hamstring_iso";
+            case "hamstring_iso"   -> "hinge";
+            case "quad_machine"    -> "squat";
+            case "horizontal_push" -> "vertical_push";
+            case "vertical_push"   -> "horizontal_push";
+            case "dips_push"       -> "triceps";
+            case "chest_iso"       -> "horizontal_push";
+            case "vertical_pull"   -> "horizontal_pull";
+            case "horizontal_pull" -> "vertical_pull";
+            case "biceps"          -> "vertical_pull";
+            case "triceps"         -> "horizontal_push";
+            case "side_delt"       -> "rear_delt";
+            case "rear_delt"       -> "side_delt";
+            case "core_stability"  -> "core_flexion";
+            case "core_flexion"    -> "core_stability";
+            default                -> null;
+        };
+    }
+
+    /** Erkennt anhand Focus-Text und Übungsmuster, ob ein Tag ein Bein-Tag ist. */
+    private boolean isLegDay(GeneratedDay day) {
+        String combined = (day.dayName() + " " + day.focus()).toLowerCase();
+        if (combined.contains("bein") || combined.contains("leg") || combined.contains("quad") ||
+                combined.contains("hamstring") || combined.contains("glute") || combined.contains("gesäß"))
+            return true;
+        long legExercises = day.exercises().stream()
+                .filter(e -> {
+                    String cat = findMovementCategory(e.exerciseName());
+                    return cat != null && (cat.contains("squat") || cat.contains("hinge") ||
+                            cat.contains("lunge") || cat.contains("hamstring") ||
+                            cat.contains("glute") || cat.contains("explosive") ||
+                            cat.contains("quad_machine"));
+                }).count();
+        return legExercises >= 3;
+    }
+
+    // =========================================================================
+    // Tagesreihenfolge nach Fokus korrigieren
+    // =========================================================================
+
+    private GeneratedPlan reorderGeneratedPlanByFocus(GeneratedPlan plan, GeneratePlanRequest request) {
+        if (plan.days().size() <= 1) return plan;
+        String focusMuscles = resolveFocusMuscles(request);
+        if (focusMuscles.isBlank()) return plan;
+
+        List<GeneratedDay> days = new ArrayList<>(plan.days());
+        GeneratedDay mobilityDay = null;
+        List<GeneratedDay> trainingDays = new ArrayList<>();
+        for (GeneratedDay day : days) {
+            if ("Mobilitätsblock".equalsIgnoreCase(day.dayName())) mobilityDay = day;
+            else trainingDays.add(day);
         }
 
-        // Sekundärer Scan: Übungsnamen prüfen
+        int priorityIndex = findFocusDayIndex(trainingDays, focusMuscles);
+        if (priorityIndex > 0) {
+            GeneratedDay focusDay = trainingDays.remove(priorityIndex);
+            trainingDays.add(0, focusDay);
+            log.info("Tagesreihenfolge angepasst: '{}' → Tag A (Fokus: {})", focusDay.dayName(), focusMuscles);
+        }
+
+        List<GeneratedDay> renamed = renameDaysSequentially(trainingDays);
+        if (mobilityDay != null) renamed.add(mobilityDay);
+        return new GeneratedPlan(plan.planName(), plan.description(), renamed);
+    }
+
+    private int findFocusDayIndex(List<GeneratedDay> days, String focusMuscles) {
+        if (days.isEmpty()) return 0;
+        String fl = focusMuscles.toLowerCase();
+        FocusType focus = detectFocusType(fl);
+        for (int i = 0; i < days.size(); i++) {
+            String dayFocus = (days.get(i).focus() + " " + days.get(i).dayName()).toLowerCase();
+            if (matchesFocusType(dayFocus, focus)) return i;
+        }
         for (int i = 0; i < days.size(); i++) {
             boolean exerciseMatch = days.get(i).exercises().stream()
                     .anyMatch(ex -> exerciseMatchesFocus(ex.exerciseName().toLowerCase(), focus));
             if (exerciseMatch) return i;
         }
-
-        return 0; // kein Match → unverändert lassen
+        return 0;
     }
 
     private enum FocusType { BEINE, BRUST, RUECKEN, SCHULTER, ARME, CORE, UNKNOWN }
@@ -171,32 +604,21 @@ public class AiService {
     private FocusType detectFocusType(String focusLower) {
         if (focusLower.contains("bein") || focusLower.contains("quad") ||
                 focusLower.contains("hamstring") || focusLower.contains("gesäß") ||
-                focusLower.contains("glute") || focusLower.contains("legs") ||
-                focusLower.contains("wade")) {
+                focusLower.contains("glute") || focusLower.contains("legs") || focusLower.contains("wade"))
             return FocusType.BEINE;
-        }
         if (focusLower.contains("brust") || focusLower.contains("pecto") ||
-                focusLower.contains("chest") || focusLower.contains("push")) {
+                focusLower.contains("chest") || focusLower.contains("push"))
             return FocusType.BRUST;
-        }
         if (focusLower.contains("rücken") || focusLower.contains("back") ||
-                focusLower.contains("latiss") || focusLower.contains("rudern") ||
-                focusLower.contains("pull")) {
+                focusLower.contains("latiss") || focusLower.contains("rudern") || focusLower.contains("pull"))
             return FocusType.RUECKEN;
-        }
-        if (focusLower.contains("schulter") || focusLower.contains("deltoid") ||
-                focusLower.contains("shoulder")) {
+        if (focusLower.contains("schulter") || focusLower.contains("deltoid") || focusLower.contains("shoulder"))
             return FocusType.SCHULTER;
-        }
         if (focusLower.contains("arm") || focusLower.contains("bizeps") ||
-                focusLower.contains("trizeps") || focusLower.contains("bicep") ||
-                focusLower.contains("tricep")) {
+                focusLower.contains("trizeps") || focusLower.contains("bicep") || focusLower.contains("tricep"))
             return FocusType.ARME;
-        }
-        if (focusLower.contains("core") || focusLower.contains("bauch") ||
-                focusLower.contains("abs")) {
+        if (focusLower.contains("core") || focusLower.contains("bauch") || focusLower.contains("abs"))
             return FocusType.CORE;
-        }
         return FocusType.UNKNOWN;
     }
 
@@ -204,18 +626,14 @@ public class AiService {
         return switch (focus) {
             case BEINE    -> dayFocusLower.contains("bein") || dayFocusLower.contains("quad") ||
                     dayFocusLower.contains("hamstring") || dayFocusLower.contains("gesäß") ||
-                    dayFocusLower.contains("glute") || dayFocusLower.contains("leg") ||
-                    dayFocusLower.contains("unterkörper");
+                    dayFocusLower.contains("glute") || dayFocusLower.contains("leg") || dayFocusLower.contains("unterkörper");
             case BRUST    -> dayFocusLower.contains("brust") || dayFocusLower.contains("push") ||
                     dayFocusLower.contains("chest") || dayFocusLower.contains("pecto");
             case RUECKEN  -> dayFocusLower.contains("rücken") || dayFocusLower.contains("pull") ||
                     dayFocusLower.contains("back") || dayFocusLower.contains("latiss");
-            case SCHULTER -> dayFocusLower.contains("schulter") || dayFocusLower.contains("shoulder") ||
-                    dayFocusLower.contains("deltoid");
-            case ARME     -> dayFocusLower.contains("arm") || dayFocusLower.contains("bizeps") ||
-                    dayFocusLower.contains("trizeps");
-            case CORE     -> dayFocusLower.contains("core") || dayFocusLower.contains("bauch") ||
-                    dayFocusLower.contains("abs");
+            case SCHULTER -> dayFocusLower.contains("schulter") || dayFocusLower.contains("shoulder") || dayFocusLower.contains("deltoid");
+            case ARME     -> dayFocusLower.contains("arm") || dayFocusLower.contains("bizeps") || dayFocusLower.contains("trizeps");
+            case CORE     -> dayFocusLower.contains("core") || dayFocusLower.contains("bauch") || dayFocusLower.contains("abs");
             case UNKNOWN  -> false;
         };
     }
@@ -229,8 +647,7 @@ public class AiService {
                     exerciseLower.contains("dips") || exerciseLower.contains("schrägbank");
             case RUECKEN  -> exerciseLower.contains("klimmzüge") || exerciseLower.contains("latzug") ||
                     exerciseLower.contains("rudern") || exerciseLower.contains("face pull");
-            case SCHULTER -> exerciseLower.contains("schulterdrücken") || exerciseLower.contains("seitheben") ||
-                    exerciseLower.contains("military press");
+            case SCHULTER -> exerciseLower.contains("schulterdrücken") || exerciseLower.contains("seitheben") || exerciseLower.contains("military press");
             case ARME     -> exerciseLower.contains("curl") || exerciseLower.contains("pushdown") ||
                     exerciseLower.contains("trizeps") || exerciseLower.contains("hammer");
             case CORE     -> exerciseLower.contains("plank") || exerciseLower.contains("crunch") ||
@@ -239,7 +656,6 @@ public class AiService {
         };
     }
 
-    /** Alle Fokus-Quellen zusammenführen (gleiche Logik wie im User-Prompt) */
     private String resolveFocusMuscles(GeneratePlanRequest request) {
         List<String> parts = new ArrayList<>();
         if (request.focusMuscleGroups() != null) parts.addAll(request.focusMuscleGroups());
@@ -257,7 +673,7 @@ public class AiService {
     private int calcNumDayPlans(int daysPerWeek) {
         if (daysPerWeek <= 1) return 1;
         if (daysPerWeek <= 2) return 2;
-        return 3; // 3+ Tage → immer 3 distinkte Tagespläne (A/B/C mit Rotation)
+        return 3;
     }
 
     private int calcExercisesPerDay(String level) {
@@ -314,9 +730,12 @@ public class AiService {
               ADVANCED     → genau 7 Übungen
               Wird durch REGEL 8 (Trainingsdauer) überschrieben, falls angegeben.
 
-            REGEL 3 — DUPLIKAT-VERBOT:
-              ✗ Keine Übung darf in mehreren Trainingstagen vorkommen.
-              ✓ Jeder Tag hat klar andere Übungen als alle anderen.
+            REGEL 3 — ABSOLUTES DUPLIKAT-VERBOT:
+              ✗ VERBOTEN: Eine Übung (oder eine sehr ähnliche Variante) in mehr als einem Tag.
+              ✓ Beispiel: Wenn Tag A "Kniebeuge mit Langhantel" hat →
+                          Tag B darf KEINE Kniebeuge mehr haben (weder LH, KH noch Goblet Squat).
+                          Tag B nutzt stattdessen Hinge (Rumänisches KH) oder Lunge.
+              ✓ Jeder Tag hat KOMPLETT andere Übungen als alle anderen Tage.
 
             REGEL 4 — FOKUS-MUSKELGRUPPEN:
               Fokus-Muskelgruppen bestimmen den Charakter der Trainingstage.
@@ -351,12 +770,20 @@ public class AiService {
               ✗ VERBOTEN: Übungen, die betroffene Regionen direkt belasten.
               ✓ PFLICHT: Sichere Alternativen wählen.
 
-            REGEL 11 — MOBILITÄTSBLOCK (nur wenn "includeMobilityPlan: true"):
-              → Als LETZTEN Tag einen zusätzlichen Tag hinzufügen: "dayName": "Mobilitätsblock"
-              → Genau 5–7 Mobility-Übungen.
-              → sets: 1–2 | reps: 20–60 | weightKg: 0.0 | restSeconds: 30 | targetRpe: 3
-              → JEDE Mobilitätsübung MUSS ein gefülltes "description"-Feld haben.
-              → Normale Trainingstag-Übungen haben "description": "".
+                REGEL 11 — MOBILITÄTSBLOCK (nur wenn "includeMobilityPlan: true"):
+                    → Als LETZTEN Tag einen zusätzlichen Tag hinzufügen: "dayName": "Mobilitätsblock"
+                    → Genau 6–7 Mobility-Übungen mit KONKRETEN, bekannten Namen.
+                    → sets: 1–2 | reps: 20–60 | weightKg: 0.0 | restSeconds: 30 | targetRpe: 3
+                    → VERBOTEN: Generische Namen wie "Mobilitätsübungen", "Seitenbewegungen", "Hüftrotationen"
+                    → PFLICHT: Konkrete Namen wie "Hip Flexor Stretch", "World's Greatest Stretch",\s
+                      "Pigeon Pose", "Cat-Cow", "90/90 Hip Stretch", "Thoracic Rotation",
+                      "Couch Stretch", "Jefferson Curl", "Deep Squat Hold", "Doorway Chest Stretch"
+                    → JEDE Übung MUSS eine 2–3 Satz Ausführungsbeschreibung auf Deutsch haben:
+                      Startposition → Bewegungsausführung → Worauf achten
+                    → Beispiel description: "Im Vierfüßlerstand, Hände unter Schultern.\s
+                      Einatmen: Bauch sinkt, Kopf hebt sich (Kuh-Position).\s
+                      Ausatmen: Rücken wölbt sich nach oben, Kinn zur Brust (Katze).\s
+                      Bewegung fließend und mit dem Atem synchronisieren."
 
             REGEL 12 — TAGESREIHENFOLGE NACH FOKUS (KRITISCH):
               ✓ PFLICHT: Der Fokus-Tag MUSS als "Tag A" (erstes Element im 'days'-Array) stehen.
@@ -398,8 +825,6 @@ public class AiService {
                     "Hypertrophie" → 3–4 Sätze, 8–12 Wdh, mittlere Last, 60–90s Pause
                     "Explosiv/Athletic" → 3–4 Sätze, 4–8 Wdh, schnelle Ausführung
                     "Kraft-Ausdauer" → 2–3 Sätze, 12–20 Wdh, kurze Pausen 30–60s
-                • Reihenfolge: Variiere die Übungsreihenfolge (z.B. auch mal Isolation vor
-                  Compound wenn der Fokus darauf liegt).
                 • Perspektive: Nimm jedes Mal eine andere Trainer-Perspektive ein
                   (z.B. Powerlifter, Bodybuilder, Athletik-Coach, Functional Trainer).
 
@@ -413,6 +838,65 @@ public class AiService {
                   Tag A – Kraft (5×5, hohe Last)
                   Tag B – Hypertrophie (4×10, mittlere Last)
                   Tag C – Explosiv/Athletik (3×6, schnell + Sprünge bei Bein-Tag)
+
+            REGEL 16 — ÜBUNGS-TAXONOMIE (NUTZE DIESEN POOL — VARIIERE AKTIV):
+              Wähle aus diesen Kategorien. Pro Kategorie darf jede Variante maximal
+              einmal über ALLE Tage hinweg vorkommen:
+
+              KNIEBEUGE-MUSTER (maximal 1 Variante pro Plan):
+                Kniebeuge mit Langhantel | Front Squat | Goblet Squat | Box Squat
+                Hackenschmidt-Kniebeuge | Zercher Kniebeuge | Sumo Kniebeuge | Pause Kniebeuge
+
+              HINGE-MUSTER (maximal 1 Variante pro Tag, aber andere pro Tag erlaubt):
+                Rumänisches Kreuzheben | Kreuzheben | Sumo Kreuzheben | Hip Thrust mit Langhantel
+                Good Morning | Single-Leg RDL | Trap Bar Kreuzheben | Defizit Kreuzheben
+
+              LUNGE-MUSTER:
+                Ausfallschritte mit Kurzhanteln | Bulgarische Split Kniebeuge | Reverse Lunge
+                Ausfallschritte laufend | Seitliche Ausfallschritte | Step-ups auf Kasten
+
+              EXPLOSIV (Bein-Tage, INTERMEDIATE/ADVANCED):
+                Box Jumps | Jump Squats | Broad Jumps | Depth Jumps | Power Clean
+                Hang Clean | Kettlebell Swing | Medball Slam | Laterale Sprünge
+
+              HORIZONTALES DRÜCKEN:
+                Bankdrücken mit Langhantel | Bankdrücken mit Kurzhanteln
+                Schrägbankdrücken mit Langhantel | Schrägbankdrücken mit Kurzhanteln
+                Decline Bankdrücken | Guillotine Press | Push-ups auf Ringen
+
+              VERTIKALES DRÜCKEN:
+                Schulterdrücken mit Langhantel | Schulterdrücken mit Kurzhanteln
+                Arnold Press | Push Press | Z-Press sitzend | Landmine Press | Bradford Press
+
+              BRUST-ISOLATION:
+                Kurzhantel-Fliegenschlagen | Kabelzug-Fliegenschlagen | Pec Deck Maschine
+                Low-to-High Kabelzug | High-to-Low Kabelzug
+
+              SEITE SCHULTER:
+                Seitheben mit Kurzhanteln | Seitheben am Kabelzug | Maschinen-Seitheben
+                Upright Row | Kabelzug-Seitheben einseitig
+
+              TRIZEPS:
+                Trizeps Pushdown am Kabelzug | Overhead Trizeps Extension KH
+                Schädelbrechter mit Langhantel | Nahgriff Bankdrücken | JM Press
+                Trizeps Dips mit Zusatzgewicht | Kickbacks mit Kurzhantel
+
+              VERTIKALES ZIEHEN:
+                Klimmzüge | Klimmzüge mit Zusatzgewicht | Latzug am Kabelzug (weit/eng/Untergriff)
+                Straight-Arm Pulldown | Ringklimmzüge | Assistierte Klimmzüge
+
+              HORIZONTALES ZIEHEN:
+                Langhantelrudern | Einarmiges Kurzhantelrudern | Seilzug-Rudern sitzend
+                T-Bar Rudern | Pendlay Rudern | Meadows Row | Chest Supported Row | Seal Row
+
+              HINTERE SCHULTER:
+                Face Pulls am Kabelzug | Vorgebeugtes Seitheben | Reverse Flyes
+                Band Pull-Aparts | W-Raises | Rear Delt Maschine
+
+              BIZEPS:
+                Bizeps-Curl mit Langhantel | Bizeps-Curl mit Kurzhanteln | Hammer Curls
+                Preacher Curl | Spider Curls | Incline Dumbbell Curl | Zottman Curl
+                Kabelzug-Curl | Reverse Curls
 
             ═══════════════════════════════════════════════════════
             AUSGABEFORMAT (exakt einhalten):
@@ -449,8 +933,7 @@ public class AiService {
 
     private String buildPlanUserPrompt(AppUser user, GeneratePlanRequest request) {
         List<String> focusParts = new ArrayList<>();
-        if (request.focusMuscleGroups() != null)
-            focusParts.addAll(request.focusMuscleGroups());
+        if (request.focusMuscleGroups() != null) focusParts.addAll(request.focusMuscleGroups());
         if (request.focusMusclesFreetext() != null && !request.focusMusclesFreetext().isBlank())
             focusParts.add(request.focusMusclesFreetext().trim());
         if (request.focusMuscles() != null && !request.focusMuscles().isBlank())
@@ -470,15 +953,15 @@ public class AiService {
 
         String durationStr = request.sessionDurationMinutes() != null
                 ? request.sessionDurationMinutes() + " Minuten" : "Nicht angegeben";
-        String sleepStr = request.sleepHoursPerNight() != null
+        String sleepStr   = request.sleepHoursPerNight() != null
                 ? request.sleepHoursPerNight() + " Stunden" : "Nicht angegeben";
         String stressStr  = translateStress(request.stressLevel());
         String injuriesStr = (request.injuries() != null && !request.injuries().isBlank())
                 ? request.injuries().trim() : "Keine";
         boolean mobility  = Boolean.TRUE.equals(request.includeMobilityPlan());
 
-        int    sleepH     = request.sleepHoursPerNight() != null ? request.sleepHoursPerNight() : 7;
-        String stress     = request.stressLevel() != null ? request.stressLevel().toUpperCase() : "MODERATE";
+        int sleepH = request.sleepHoursPerNight() != null ? request.sleepHoursPerNight() : 7;
+        String stress = request.stressLevel() != null ? request.stressLevel().toUpperCase() : "MODERATE";
         String recoveryAdvice;
         if (sleepH <= 5 || "HIGH".equals(stress)) {
             recoveryAdvice = "Schlechte Regeneration → max. 2–3 Sätze. Gewichte −10%. Kein Training bis Versagen.";
@@ -500,13 +983,12 @@ public class AiService {
             default -> "Tag A (Push): Brust → Schulter → Trizeps\nTag B (Pull): Rücken → Bizeps\nTag C (Legs): Beine";
         };
 
-        String focusSection = buildFocusSection(focusMuscles, numDayPlans);
-
-        // ── NEU: Fokus-Tagesreihenfolge bestimmen ─────────────────────────────
+        String focusSection      = buildFocusSection(focusMuscles, numDayPlans);
         String focusOrderingRule = buildFocusOrderingRule(focusMuscles);
+        String rotationLine      = buildRotationHint(daysPerWeek, numDayPlans, List.of("Tag A", "Tag B", "Tag C"));
 
-        String rotationLine = buildRotationHint(daysPerWeek, numDayPlans,
-                List.of("Tag A", "Tag B", "Tag C"));
+        // ── NEU: Konkrete Duplikat-Verbotsliste für diesen Plan ───────────────
+        String duplicateExampleHint = buildDuplicateHint(focusMuscles, numDayPlans);
 
         return "Erstelle einen strukturierten Trainingsplan anhand der folgenden Angaben:\n\n"
                 + "Planname: "                 + planName     + "\n"
@@ -538,13 +1020,14 @@ public class AiService {
                 + standardDist + "\n"
                 + focusSection + "\n"
                 + "\n"
-                // ── NEU: explizite Reihenfolge-Regel ──────────────────────────
                 + "4. TAGESREIHENFOLGE (KRITISCH — REGEL 12):\n"
                 + focusOrderingRule + "\n"
                 + "\n"
                 + "5. ÜBUNGSREIHENFOLGE PRO TAG: Große Muskelgruppen zuerst. Schulter/Arme niemals vor Brust/Rücken/Beinen.\n"
                 + "\n"
-                + "6. DUPLIKAT-VERBOT: Keine Übung in mehr als einem Tag.\n"
+                + "6. ABSOLUTES DUPLIKAT-VERBOT (KRITISCH — REGEL 3 + 15):\n"
+                + "   Jede Übung darf im GESAMTEN Plan nur EINMAL vorkommen.\n"
+                + duplicateExampleHint + "\n"
                 + (rotationLine.isBlank() ? "" : "\n7. ROTATION: " + rotationLine + "\n")
                 + "\n"
                 + "8. TRAININGSDAUER: " + durationStr + "\n"
@@ -570,16 +1053,43 @@ public class AiService {
     }
 
     /**
-     * NEU: Erzeugt eine explizite Reihenfolge-Anweisung basierend auf dem Fokus.
+     * NEU: Erzeugt konkrete Duplikat-Verbots-Beispiele für den User-Prompt.
+     * Macht Regel 3 anschaulicher und verhindert typische Fehler.
      */
+    private String buildDuplicateHint(String focusMuscles, int numDayPlans) {
+        if (numDayPlans <= 1) return "   (Nur 1 Tag → kein Duplikat-Problem)";
+
+        String fl = (focusMuscles != null ? focusMuscles : "").toLowerCase();
+        boolean hasBein = fl.contains("bein") || fl.contains("quad") || fl.contains("hamstring") || fl.contains("gesäß");
+
+        if (hasBein && numDayPlans >= 2) {
+            return """
+                   KONKRETE VERBOTSLISTE (Beispiele — gilt für alle Übungen):
+                   ✗ Kniebeuge (irgendeine Variante) darf nur auf EINEM Tag vorkommen.
+                   ✗ Ausfallschritte dürfen nur auf EINEM Tag vorkommen.
+                   ✗ Beinpresse darf nur auf EINEM Tag vorkommen.
+                   ✗ Rumänisches Kreuzheben darf nur auf EINEM Tag vorkommen.
+                   ✗ Beinbeuger darf nur auf EINEM Tag vorkommen.
+                   ✓ Wenn Tag A Kniebeuge hat → Tag B nutzt Deadlift / Hip Thrust / Split Kniebeuge statt nochmal Kniebeuge.
+                   ✓ Wenn Tag A Beinbeuger hat → Tag B nutzt Nordische Hamstring Curls oder SL-RDL statt Beinbeuger.""";
+        }
+
+        return """
+               KONKRETE VERBOTSLISTE:
+               ✗ Bankdrücken in irgendwelchen Varianten nur auf EINEM Tag erlaubt.
+               ✗ Klimmzüge / Latzug darf nur auf EINEM Tag vorkommen.
+               ✗ Schulterdrücken nur auf EINEM Tag.
+               ✗ Kniebeuge-Varianten nur auf EINEM Tag.
+               ✓ Prüfe vor jedem Eintrag: Gibt es diese Übung schon in einem anderen Tag?
+               ✓ Wenn ja → wähle eine andere Variante aus dem Pool (REGEL 16).""";
+    }
+
     private String buildFocusOrderingRule(String focusMuscles) {
         if (focusMuscles == null || focusMuscles.isBlank()) {
             return "   Kein Fokus → Standardreihenfolge beibehalten: Push (Tag A) → Pull (Tag B) → Legs (Tag C).";
         }
-
         String fl = focusMuscles.toLowerCase();
         FocusType focus = detectFocusType(fl);
-
         return switch (focus) {
             case BEINE    -> "   Fokus BEINE → Tag A MUSS ein Bein-Workout sein (Kniebeuge, Beinpresse, RDL usw.).\n"
                     + "   Tag A – Beine kommt als ERSTES Element im 'days'-Array.\n"
@@ -602,12 +1112,10 @@ public class AiService {
         };
     }
 
-    /** Fokus-spezifische Muskelgruppen-Aufteilung */
     private String buildFocusSection(String focusMuscles, int numDayPlans) {
         if (focusMuscles.isBlank()) return "";
         String fl = focusMuscles.toLowerCase();
-        boolean isBein     = fl.contains("bein") || fl.contains("quad") || fl.contains("hamstring")
-                || fl.contains("gesäß") || fl.contains("glute");
+        boolean isBein     = fl.contains("bein") || fl.contains("quad") || fl.contains("hamstring") || fl.contains("gesäß") || fl.contains("glute");
         boolean isSchulter = fl.contains("schulter") || fl.contains("deltoid");
         boolean isBrust    = fl.contains("brust") || fl.contains("pecto");
         boolean isRuecken  = fl.contains("rücken") || fl.contains("latiss");
@@ -616,55 +1124,54 @@ public class AiService {
             if (isBein) return """
 
                     FOKUS-REGEL BEINE (3 Tage — BEINE ZUERST als Tag A):
-                    Tag A (Beine – Quad, ERSTER TAG): Kniebeuge, Beinpresse, Ausfallschritte, Wadenheben + ggf. 1 Oberkörper.
-                    Tag B (Beine – Hamstring): Rumänisches Kreuzheben, Beinbeuger, Gesäßübung + ggf. 1 Oberkörper.
-                    Tag C (Oberkörper): Brust, Rücken, Schulter, Arme.""";
+                    Tag A (Beine – Quad, ERSTER TAG): Kniebeuge ODER Front Squat + Beinpresse + Ausfallschritte + Wadenheben.
+                    Tag B (Beine – Hinge/Posterior, VERSCHIEDENE ÜBUNGEN): Rumänisches Kreuzheben + Beinbeuger + Hip Thrust + Bulgarische Split Kniebeuge.
+                    Tag C (Oberkörper): Brust, Rücken, Schulter, Arme — KEINE Bein-Übungen mehr.
+                    WICHTIG: Keine einzige Übung aus Tag A darf in Tag B erscheinen!""";
             if (isSchulter) return """
 
                     FOKUS-REGEL SCHULTER (3 Tage — SCHULTER ZUERST):
-                    Tag A (Schulter+Brust, ERSTER TAG): Schulterdrücken, Seitheben, Bankdrücken, Fliegenschlagen, Trizeps.
-                    Tag B (Schulter+Rücken): Seitheben hinten, Face Pulls, Latzug, Rudern, Bizeps.
-                    Tag C (Beine): Kniebeuge, Beinpresse, Rumänisches KH, Ausfallschritte, Waden.""";
+                    Tag A (Schulter+Brust, ERSTER TAG): Schulterdrücken + Seitheben + Bankdrücken + Fliegenschlagen + Trizeps.
+                    Tag B (Schulter+Rücken, ANDERE ÜBUNGEN): Vorgebeugtes Seitheben + Face Pulls + Latzug + Rudern + Bizeps.
+                    Tag C (Beine): Kniebeuge + Beinpresse + Rumänisches KH + Ausfallschritte + Waden.""";
             if (isBrust) return """
 
                     FOKUS-REGEL BRUST (3 Tage — BRUST/PUSH ZUERST):
-                    Tag A (Brust+Schulter, ERSTER TAG): Bankdrücken, Schrägdrücken, Schulterdrücken, Seitheben, Trizeps.
-                    Tag B (Brust+Trizeps): Schrägbankdrücken KH, Fliegenschlagen, Trizeps-Übungen.
-                    Tag C (Rücken+Beine): Klimmzüge, Rudern, Kniebeuge, Rumänisches KH.""";
+                    Tag A (Brust+Schulter, ERSTER TAG): Bankdrücken + Schrägdrücken + Schulterdrücken + Seitheben + Trizeps.
+                    Tag B (Brust+Trizeps, ANDERE ÜBUNGEN): Schrägbankdrücken KH + Fliegenschlagen + Pec Deck + Trizeps-Variation.
+                    Tag C (Rücken+Beine): Klimmzüge + Rudern + Kniebeuge + Rumänisches KH.""";
             if (isRuecken) return """
 
                     FOKUS-REGEL RÜCKEN (3 Tage — RÜCKEN/PULL ZUERST):
-                    Tag A (Rücken-Breite, ERSTER TAG): Klimmzüge, Latzug, einarmiges Rudern, Bizeps.
-                    Tag B (Rücken-Dicke): Langhantelrudern, T-Bar-Rudern, Kreuzheben, Face Pulls, Bizeps-Variation.
-                    Tag C (Brust+Beine): Bankdrücken, Schrägdrücken, Kniebeuge, Rumänisches KH.""";
+                    Tag A (Rücken-Breite, ERSTER TAG): Klimmzüge + Latzug (Untergriff) + Einarmiges Rudern + Hammer Curls.
+                    Tag B (Rücken-Dicke, ANDERE ÜBUNGEN): Langhantelrudern + T-Bar Rudern + Seilzug-Rudern + Face Pulls + Bizeps-Curl.
+                    Tag C (Brust+Beine): Bankdrücken + Schrägdrücken + Kniebeuge + Rumänisches KH.""";
         } else if (numDayPlans == 2) {
             if (isBein) return """
 
                     FOKUS-REGEL BEINE (2 Tage — BEINE ZUERST als Tag A):
-                    Tag A (Beine – Quad, ERSTER TAG): Kniebeuge, Beinpresse, Ausfallschritte + Oberkörper ergänzend.
-                    Tag B (Beine – Hamstring + Oberkörper): Rumänisches KH, Beinbeuger + Oberkörper ergänzend.""";
+                    Tag A (Beine – Quad): Kniebeuge + Beinpresse + Ausfallschritte + Wadenheben + Oberkörper ergänzend.
+                    Tag B (Beine – Hinge, KOMPLETT ANDERE ÜBUNGEN): Rumänisches KH + Beinbeuger + Hip Thrust + Oberkörper.
+                    KRITISCH: Tag B darf KEINE Kniebeuge, KEINE Beinpresse, KEINE Ausfallschritte enthalten!""";
             if (isSchulter) return """
 
                     FOKUS-REGEL SCHULTER (2 Tage — SCHULTER ZUERST):
-                    Tag A (Schulter+Brust, ERSTER TAG): Drückende Schulterübungen + Brust.
-                    Tag B (Schulter+Rücken): Ziehende Schulterübungen + Rücken.""";
+                    Tag A (Schulter+Brust, ERSTER TAG): Schulterdrücken + Seitheben + Bankdrücken + Trizeps.
+                    Tag B (Schulter+Rücken, ANDERE ÜBUNGEN): Vorgebeugtes Seitheben + Face Pulls + Latzug + Bizeps.""";
             if (isBrust) return """
 
                     FOKUS-REGEL BRUST (2 Tage — BRUST ZUERST):
-                    Tag A (Brust+Push, ERSTER TAG): Bankdrücken, Schrägdrücken, Schulter, Trizeps.
-                    Tag B (Rücken+Beine): Klimmzüge, Rudern, Kniebeuge, Rumänisches KH.""";
+                    Tag A (Brust+Push, ERSTER TAG): Bankdrücken + Schrägdrücken + Schulterdrücken + Trizeps.
+                    Tag B (Rücken+Beine, ANDERE ÜBUNGEN): Klimmzüge + Rudern + Kniebeuge + Rumänisches KH.""";
             if (isRuecken) return """
 
                     FOKUS-REGEL RÜCKEN (2 Tage — RÜCKEN ZUERST):
-                    Tag A (Rücken+Pull, ERSTER TAG): Klimmzüge, Latzug, Rudern, Bizeps.
-                    Tag B (Brust+Beine): Bankdrücken, Kniebeuge, Beinpresse, Trizeps.""";
+                    Tag A (Rücken+Pull, ERSTER TAG): Klimmzüge + Latzug + Langhantelrudern + Bizeps.
+                    Tag B (Brust+Beine, ANDERE ÜBUNGEN): Bankdrücken + Schrägdrücken + Kniebeuge + Beinbeuger.""";
         }
         return "\nFOKUS '" + focusMuscles + "': Tag A MUSS diesen Fokus priorisieren — klar stärker gewichten als andere Tage.";
     }
 
-    /**
-     * REGEL 13: Explosive Übungen für INTERMEDIATE und ADVANCED auf Bein-Tagen.
-     */
     private String buildExplosiveRule(String level, int numDayPlans) {
         if (level == null) return "";
         String l = level.toUpperCase();
@@ -673,13 +1180,10 @@ public class AiService {
         return "12. EXPLOSIVE ÜBUNG AUF BEIN-TAGEN (PFLICHT für " + level + " — REGEL 13):\n"
                 + "    Jeder Bein-Trainingstag MUSS als ERSTE Übung eine explosive Übung enthalten.\n"
                 + "    Erlaubt: Box Jumps | Jump Squats | Broad Jumps | Power Clean | Kettlebell Swing\n"
-                + "             Medball Slam | Laterale Sprünge | Depth Jumps | Bounding\n"
+                + "             Medball Slam | Laterale Sprünge | Depth Jumps | Bounding | Hang Clean\n"
                 + "    weightKg: 0.0 | sets: 3–4 | reps: 5–8 | restSeconds: 90–120 | targetRpe: 8–9\n\n";
     }
 
-    /**
-     * REGEL 14 + 15: Variabilität und klare Tages-Unterschiede.
-     */
     private String buildVariabilityHint(String level, int numDayPlans) {
         String styleHint;
         if (numDayPlans == 1) {
@@ -779,7 +1283,7 @@ public class AiService {
     private int clamp(int v, int min, int max) { return Math.max(min, Math.min(max, v)); }
 
     // =========================================================================
-    // Fallback-Plan (mit fokusbasierter Tagesreihenfolge)
+    // Fallback-Plan
     // =========================================================================
 
     private GeneratedPlan buildFallbackPlan(GeneratePlanRequest request) {
@@ -787,9 +1291,7 @@ public class AiService {
         String level      = resolveRawLevel(request, null);
         int daysPerWeek   = request.daysPerWeek() != null ? request.daysPerWeek() : 3;
         int numDayPlans   = calcNumDayPlans(daysPerWeek);
-
-        // Variant: 0, 1 oder 2 — sorgt für sichtbare Variation beim Fallback
-        int variant = (int) (System.currentTimeMillis() % 3);
+        int variant       = (int) (System.currentTimeMillis() % 3);
 
         List<String> dayNames = List.of("Tag A", "Tag B", "Tag C");
         String rotation   = buildRotationHint(daysPerWeek, numDayPlans, dayNames);
@@ -802,13 +1304,9 @@ public class AiService {
             default             -> buildBeginnerDays();
         };
 
-        // Sätze anhand Regeneration anpassen
         int sets = calcFallbackSets(request);
-        if (sets != 3) {
-            allDays = adjustSets(allDays, sets);
-        }
+        if (sets != 3) allDays = adjustSets(allDays, sets);
 
-        // ── NEU: Tagesreihenfolge nach Fokus anpassen ──────────────────────
         String focusMuscles = resolveFocusMuscles(request);
         if (!focusMuscles.isBlank()) {
             allDays = reorderFallbackDaysByFocus(allDays, focusMuscles);
@@ -816,7 +1314,6 @@ public class AiService {
 
         List<GeneratedDay> days = new ArrayList<>(allDays.subList(0, Math.min(numDayPlans, allDays.size())));
 
-        // Mobilitätsblock hinzufügen wenn gewünscht
         if (Boolean.TRUE.equals(request.includeMobilityPlan())) {
             days.add(buildFallbackMobilityDay());
         }
@@ -824,13 +1321,8 @@ public class AiService {
         return new GeneratedPlan(planName, description, days);
     }
 
-    /**
-     * Ordnet die Fallback-Tage nach dem gewählten Fokus.
-     * Fokus-Tag wird immer Tag A (erste Position + Umbenennung).
-     */
     private List<GeneratedDay> reorderFallbackDaysByFocus(List<GeneratedDay> days, String focusMuscles) {
         if (days.size() <= 1) return days;
-
         FocusType focus = detectFocusType(focusMuscles.toLowerCase());
         if (focus == FocusType.UNKNOWN) return days;
 
@@ -846,44 +1338,30 @@ public class AiService {
                 if (match) { focusIndex = i; break; }
             }
         }
-        if (focusIndex <= 0) return renameDaysSequentially(days); // schon vorne oder nicht gefunden
+        if (focusIndex <= 0) return renameDaysSequentially(days);
 
         List<GeneratedDay> reordered = new ArrayList<>(days);
         GeneratedDay focusDay = reordered.remove(focusIndex);
         reordered.add(0, focusDay);
         log.info("Fallback-Tage umgeordnet: '{}' → Tag A (Fokus: {})", focusDay.dayName(), focusMuscles);
-
         return renameDaysSequentially(reordered);
     }
 
-    /**
-     * Benennt die Trainingstage nach der Umsortierung sequenziell um:
-     * Position 0 → "Tag A – <Inhalt>", Position 1 → "Tag B – <Inhalt>", usw.
-     * Der Suffix hinter " – " (z.B. "Beine", "Push", "Pull") bleibt erhalten.
-     * Der Mobilitätsblock wird nicht umbenannt.
-     */
     private List<GeneratedDay> renameDaysSequentially(List<GeneratedDay> days) {
         String[] labels = {"A", "B", "C", "D"};
         List<GeneratedDay> result = new ArrayList<>();
         int labelIndex = 0;
         for (GeneratedDay day : days) {
             if ("Mobilitätsblock".equalsIgnoreCase(day.dayName())) {
-                result.add(day); // Mobility bleibt unverändert
-                continue;
-            }
-            if (labelIndex >= labels.length) {
                 result.add(day);
                 continue;
             }
-            // Suffix nach " – " extrahieren (z.B. "Beine & Core", "Push", "Pull")
+            if (labelIndex >= labels.length) { result.add(day); continue; }
             String suffix = "";
             String name = day.dayName();
             int dashIdx = name.indexOf(" – ");
-            if (dashIdx >= 0) {
-                suffix = " – " + name.substring(dashIdx + 3);
-            }
-            String newName = "Tag " + labels[labelIndex] + suffix;
-            result.add(new GeneratedDay(newName, day.focus(), day.exercises()));
+            if (dashIdx >= 0) suffix = " – " + name.substring(dashIdx + 3);
+            result.add(new GeneratedDay("Tag " + labels[labelIndex] + suffix, day.focus(), day.exercises()));
             labelIndex++;
         }
         return result;
@@ -940,17 +1418,17 @@ public class AiService {
         ));
         var tagB = new GeneratedDay("Tag B – Pull", "Rücken, Bizeps", List.of(
                 new GeneratedExercise("Latzug am Kabelzug",                3, 10, 25.0, 90, 6, ""),
-                new GeneratedExercise("Rudern am Kabelzug",                3, 12, 20.0, 90, 6, ""),
+                new GeneratedExercise("Seilzug-Rudern sitzend",            3, 12, 20.0, 90, 6, ""),
                 new GeneratedExercise("Bizeps-Curl mit Kurzhanteln",       3, 12,  6.0, 60, 6, ""),
-                new GeneratedExercise("Kniebeuge mit Körpergewicht",        3, 12,  0.0, 90, 6, ""),
-                new GeneratedExercise("Rumänisches Kreuzheben",             3, 12, 20.0, 90, 6, "")
+                new GeneratedExercise("Goblet Squat mit Kurzhantel",       3, 12, 10.0, 90, 6, ""),
+                new GeneratedExercise("Rumänisches Kreuzheben",            3, 12, 20.0, 90, 6, "")
         ));
         var tagC = new GeneratedDay("Tag C – Beine", "Quadrizeps, Hamstrings, Core", List.of(
-                new GeneratedExercise("Ausfallschritte mit Körpergewicht",  3, 10,  0.0, 90, 6, ""),
-                new GeneratedExercise("Goblet Squat mit Kurzhantel",        3, 12, 10.0, 90, 6, ""),
-                new GeneratedExercise("Beinbeuger an der Maschine",         3, 12, 25.0, 60, 6, ""),
-                new GeneratedExercise("Plank",                              3, 30,  0.0, 60, 6, ""),
-                new GeneratedExercise("Crunches",                           3, 15,  0.0, 60, 6, "")
+                new GeneratedExercise("Kniebeuge mit Langhantel",          3, 10, 30.0, 90, 6, ""),
+                new GeneratedExercise("Beinpresse",                        3, 12, 50.0, 90, 6, ""),
+                new GeneratedExercise("Bulgarische Split Kniebeuge",       3, 10,  8.0, 90, 6, ""),
+                new GeneratedExercise("Beinbeuger an der Maschine",        3, 12, 25.0, 60, 6, ""),
+                new GeneratedExercise("Wadenheben stehend",                3, 15,  0.0, 60, 6, "")
         ));
         return new ArrayList<>(List.of(tagA, tagB, tagC));
     }
@@ -958,87 +1436,84 @@ public class AiService {
     // ── Fallback-Tage: Fortgeschritten (je 6 Übungen, 3 Varianten) ──────────
 
     private List<GeneratedDay> buildIntermediateDays(int variant) {
-        // ── Bein-Tag Varianten (explosive Übung immer ZUERST) ─────────────────
         GeneratedDay legs = switch (variant) {
             case 1 -> new GeneratedDay("Tag C – Beine", "Hamstring-Fokus, explosiv", List.of(
-                    new GeneratedExercise("Broad Jumps",                        3,  6,  0.0,  90, 8, ""),
-                    new GeneratedExercise("Rumänisches Kreuzheben",             4,  8, 65.0, 120, 7, ""),
-                    new GeneratedExercise("Beinbeuger an der Maschine",         3, 10, 40.0,  90, 7, ""),
-                    new GeneratedExercise("Goblet Squat mit Kurzhantel",        3, 10, 24.0,  90, 7, ""),
-                    new GeneratedExercise("Ausfallschritte mit Kurzhanteln",    3, 12, 18.0,  90, 6, ""),
-                    new GeneratedExercise("Wadenheben an der Maschine",         3, 15, 40.0,  60, 6, "")
+                    new GeneratedExercise("Broad Jumps",                       3,  6,  0.0,  90, 8, ""),
+                    new GeneratedExercise("Rumänisches Kreuzheben",            4,  8, 65.0, 120, 7, ""),
+                    new GeneratedExercise("Beinbeuger liegend",                3, 10, 40.0,  90, 7, ""),
+                    new GeneratedExercise("Bulgarische Split Kniebeuge",       3, 10, 18.0,  90, 7, ""),
+                    new GeneratedExercise("Hip Thrust mit Langhantel",         3, 12, 60.0,  90, 7, ""),
+                    new GeneratedExercise("Einbeiniges Wadenheben",            3, 15,  0.0,  60, 6, "")
             ));
             case 2 -> new GeneratedDay("Tag C – Beine", "Kraft-Ausdauer, explosiv", List.of(
-                    new GeneratedExercise("Kettlebell Swing",                   4,  8,  24.0, 90, 8, ""),
-                    new GeneratedExercise("Beinpresse",                         4, 12,  80.0, 90, 7, ""),
-                    new GeneratedExercise("Bulgarische Split Kniebeuge",        3,  8,  20.0, 90, 7, ""),
-                    new GeneratedExercise("Kniebeuge mit Langhantel",           3, 10,  60.0, 90, 7, ""),
-                    new GeneratedExercise("Beinbeuger liegend",                 3, 12,  35.0, 60, 6, ""),
-                    new GeneratedExercise("Einbeiniges Wadenheben",             3, 15,   0.0, 60, 6, "")
+                    new GeneratedExercise("Kettlebell Swing",                  4,  8, 24.0,  90, 8, ""),
+                    new GeneratedExercise("Front Squat mit Langhantel",        4, 10, 50.0,  90, 7, ""),
+                    new GeneratedExercise("Beinpresse weite Fußstellung",      3, 12, 80.0,  90, 7, ""),
+                    new GeneratedExercise("Nordische Hamstring Curls",         3,  6,  0.0, 120, 8, ""),
+                    new GeneratedExercise("Step-ups auf Kasten",               3, 10, 16.0,  90, 7, ""),
+                    new GeneratedExercise("Wadenheben sitzend",                3, 15, 30.0,  60, 6, "")
             ));
             default -> new GeneratedDay("Tag C – Beine", "Quad-Fokus, explosiv", List.of(
-                    new GeneratedExercise("Jump Squats",                        3,  8,  0.0,  90, 8, ""),
-                    new GeneratedExercise("Kniebeuge mit Langhantel",           4,  8, 70.0, 120, 7, ""),
-                    new GeneratedExercise("Beinpresse",                         3, 10, 80.0,  90, 7, ""),
-                    new GeneratedExercise("Rumänisches Kreuzheben",             3, 10, 60.0,  90, 7, ""),
-                    new GeneratedExercise("Ausfallschritte mit Kurzhanteln",    3, 12, 16.0,  90, 7, ""),
-                    new GeneratedExercise("Beinbeuger an der Maschine",         3, 12, 35.0,  60, 6, "")
+                    new GeneratedExercise("Jump Squats",                       3,  8,  0.0,  90, 8, ""),
+                    new GeneratedExercise("Kniebeuge mit Langhantel",          4,  8, 70.0, 120, 7, ""),
+                    new GeneratedExercise("Beinpresse enge Fußstellung",       3, 10, 80.0,  90, 7, ""),
+                    new GeneratedExercise("Rumänisches Kreuzheben",            3, 10, 60.0,  90, 7, ""),
+                    new GeneratedExercise("Ausfallschritte mit Kurzhanteln",   3, 12, 16.0,  90, 7, ""),
+                    new GeneratedExercise("Beinbeuger an der Maschine",        3, 12, 35.0,  60, 6, "")
             ));
         };
 
-        // ── Push-Tag Varianten ────────────────────────────────────────────────
         GeneratedDay push = switch (variant) {
             case 1 -> new GeneratedDay("Tag A – Push", "Schulter-Fokus, Hypertrophie", List.of(
-                    new GeneratedExercise("Schulterdrücken mit Langhantel",      4, 10, 35.0,  90, 7, ""),
-                    new GeneratedExercise("Schrägbankdrücken mit Kurzhanteln",   3, 10, 22.0,  90, 7, ""),
-                    new GeneratedExercise("Seitheben mit Kurzhanteln",           4, 12,  8.0,  60, 7, ""),
-                    new GeneratedExercise("Vorgebeugtes Seitheben",              3, 12,  6.0,  60, 6, ""),
-                    new GeneratedExercise("Trizeps Pushdown am Kabelzug",        3, 12, 20.0,  60, 6, ""),
-                    new GeneratedExercise("Overhead Trizeps Extension KH",      3, 12, 12.0,  60, 6, "")
+                    new GeneratedExercise("Schulterdrücken mit Langhantel",     4, 10, 35.0,  90, 7, ""),
+                    new GeneratedExercise("Schrägbankdrücken mit Kurzhanteln",  3, 10, 22.0,  90, 7, ""),
+                    new GeneratedExercise("Seitheben mit Kurzhanteln",          4, 12,  8.0,  60, 7, ""),
+                    new GeneratedExercise("Vorgebeugtes Seitheben",             3, 12,  6.0,  60, 6, ""),
+                    new GeneratedExercise("Schädelbrechter mit Langhantel",     3, 12, 20.0,  90, 7, ""),
+                    new GeneratedExercise("Overhead Trizeps Extension KH",     3, 12, 12.0,  60, 6, "")
             ));
             case 2 -> new GeneratedDay("Tag A – Push", "Brust-Fokus, Kraft-Ausdauer", List.of(
-                    new GeneratedExercise("Bankdrücken mit Kurzhanteln",         4, 10, 28.0,  90, 7, ""),
-                    new GeneratedExercise("Kabelzug-Fliegenschlagen",            3, 15, 15.0,  60, 7, ""),
-                    new GeneratedExercise("Dips",                                3, 12,  0.0,  90, 7, ""),
-                    new GeneratedExercise("Frontheben mit Kurzhanteln",          3, 12,  6.0,  60, 6, ""),
-                    new GeneratedExercise("Seitheben am Kabelzug",               3, 15, 10.0,  60, 6, ""),
-                    new GeneratedExercise("Schädelbrechter mit Kurzhanteln",     3, 12, 10.0,  60, 6, "")
+                    new GeneratedExercise("Bankdrücken mit Kurzhanteln",        4, 10, 28.0,  90, 7, ""),
+                    new GeneratedExercise("Kabelzug-Fliegenschlagen",           3, 15, 15.0,  60, 7, ""),
+                    new GeneratedExercise("Dips",                               3, 12,  0.0,  90, 7, ""),
+                    new GeneratedExercise("Arnold Press",                       3, 12, 14.0,  90, 7, ""),
+                    new GeneratedExercise("Seitheben am Kabelzug",              3, 15, 10.0,  60, 6, ""),
+                    new GeneratedExercise("Trizeps Pushdown am Kabelzug",       3, 12, 20.0,  60, 6, "")
             ));
             default -> new GeneratedDay("Tag A – Push", "Brust, Schulter, Trizeps", List.of(
-                    new GeneratedExercise("Bankdrücken mit Langhantel",          4,  8, 60.0, 120, 7, ""),
-                    new GeneratedExercise("Schrägbankdrücken mit Kurzhanteln",   3, 10, 22.0,  90, 7, ""),
-                    new GeneratedExercise("Schulterdrücken mit Langhantel",      3, 10, 30.0,  90, 7, ""),
-                    new GeneratedExercise("Seitheben mit Kurzhanteln",           3, 12,  8.0,  60, 7, ""),
-                    new GeneratedExercise("Trizeps Dips",                        3, 10,  0.0,  90, 7, ""),
-                    new GeneratedExercise("Vorgebeugtes Seitheben",              3, 12,  6.0,  60, 6, "")
+                    new GeneratedExercise("Bankdrücken mit Langhantel",         4,  8, 60.0, 120, 7, ""),
+                    new GeneratedExercise("Schrägbankdrücken mit Langhantel",   3, 10, 45.0,  90, 7, ""),
+                    new GeneratedExercise("Kurzhantel-Fliegenschlagen",         3, 12, 16.0,  90, 7, ""),
+                    new GeneratedExercise("Schulterdrücken mit Kurzhanteln",    3, 10, 20.0,  90, 7, ""),
+                    new GeneratedExercise("Maschinen-Seitheben",                3, 12,  0.0,  60, 6, ""),
+                    new GeneratedExercise("Trizeps Dips mit Zusatzgewicht",     3, 10, 10.0,  90, 7, "")
             ));
         };
 
-        // ── Pull-Tag Varianten ────────────────────────────────────────────────
         GeneratedDay pull = switch (variant) {
             case 1 -> new GeneratedDay("Tag B – Pull", "Rücken-Breite, Hypertrophie", List.of(
-                    new GeneratedExercise("Klimmzüge mit Zusatzgewicht",         4,  8, 10.0, 120, 7, ""),
-                    new GeneratedExercise("Latzug eng Griff",                    3, 10, 50.0,  90, 7, ""),
-                    new GeneratedExercise("Seilzug-Rudern sitzend",              3, 12, 45.0,  90, 7, ""),
-                    new GeneratedExercise("Face Pulls am Kabelzug",              3, 15, 20.0,  60, 6, ""),
-                    new GeneratedExercise("Hammer Curls mit Kurzhanteln",        3, 12, 14.0,  60, 6, ""),
-                    new GeneratedExercise("Konzentrations Curls",                3, 12, 10.0,  60, 6, "")
+                    new GeneratedExercise("Klimmzüge mit Zusatzgewicht",        4,  8, 10.0, 120, 7, ""),
+                    new GeneratedExercise("Latzug Untergriff",                  3, 10, 50.0,  90, 7, ""),
+                    new GeneratedExercise("Einarmiges Kurzhantelrudern",        3, 10, 24.0,  90, 7, ""),
+                    new GeneratedExercise("Face Pulls am Kabelzug",             3, 15, 20.0,  60, 6, ""),
+                    new GeneratedExercise("Hammer Curls mit Kurzhanteln",       3, 12, 14.0,  60, 6, ""),
+                    new GeneratedExercise("Konzentrations Curls",               3, 12, 10.0,  60, 6, "")
             ));
             case 2 -> new GeneratedDay("Tag B – Pull", "Rücken-Dicke, Kraft", List.of(
-                    new GeneratedExercise("Langhantelrudern",                    5,  6, 55.0, 150, 8, ""),
-                    new GeneratedExercise("T-Bar Rudern",                        4,  8, 40.0, 120, 7, ""),
-                    new GeneratedExercise("Klimmzüge",                           3,  8,  0.0, 120, 7, ""),
-                    new GeneratedExercise("Einarmiges Kurzhantelrudern",         3, 10, 24.0,  90, 7, ""),
-                    new GeneratedExercise("Bizeps-Curl mit Langhantel",          3, 10, 22.0,  60, 7, ""),
-                    new GeneratedExercise("Reverse Curls",                       3, 12, 10.0,  60, 6, "")
+                    new GeneratedExercise("Langhantelrudern",                   5,  6, 55.0, 150, 8, ""),
+                    new GeneratedExercise("T-Bar Rudern",                       4,  8, 40.0, 120, 7, ""),
+                    new GeneratedExercise("Latzug weit Griff",                  3, 10, 50.0,  90, 7, ""),
+                    new GeneratedExercise("Rear Delt Maschine",                 3, 15,  0.0,  60, 6, ""),
+                    new GeneratedExercise("Bizeps-Curl mit Langhantel",         3, 10, 22.0,  60, 7, ""),
+                    new GeneratedExercise("Reverse Curls",                      3, 12, 10.0,  60, 6, "")
             ));
             default -> new GeneratedDay("Tag B – Pull", "Rücken, Bizeps", List.of(
-                    new GeneratedExercise("Klimmzüge",                           4,  6,  0.0, 120, 7, ""),
-                    new GeneratedExercise("Langhantelrudern",                    4,  8, 50.0, 120, 7, ""),
-                    new GeneratedExercise("Latzug am Kabelzug",                  3, 10, 45.0,  90, 7, ""),
-                    new GeneratedExercise("Einarmiges Kurzhantelrudern",         3, 10, 20.0,  90, 7, ""),
-                    new GeneratedExercise("Bizeps-Curl mit Langhantel",          3, 10, 20.0,  60, 7, ""),
-                    new GeneratedExercise("Hammer Curls mit Kurzhanteln",        3, 12, 12.0,  60, 6, "")
+                    new GeneratedExercise("Klimmzüge",                          4,  6,  0.0, 120, 7, ""),
+                    new GeneratedExercise("Pendlay Rudern",                     4,  8, 50.0, 120, 7, ""),
+                    new GeneratedExercise("Seilzug-Rudern sitzend",             3, 10, 45.0,  90, 7, ""),
+                    new GeneratedExercise("W-Raises",                           3, 15,  5.0,  60, 6, ""),
+                    new GeneratedExercise("Preacher Curl",                      3, 10, 20.0,  90, 7, ""),
+                    new GeneratedExercise("Zottman Curl",                       3, 12,  8.0,  60, 6, "")
             ));
         };
 
@@ -1048,96 +1523,93 @@ public class AiService {
     // ── Fallback-Tage: Experte (je 7 Übungen, 3 Varianten) ───────────────────
 
     private List<GeneratedDay> buildAdvancedDays(int variant) {
-        // ── Bein-Tag Varianten (explosive Übung ZUERST, PFLICHT) ──────────────
         GeneratedDay legs = switch (variant) {
             case 1 -> new GeneratedDay("Tag C – Beine", "Hamstring & Kraft, explosiv", List.of(
-                    new GeneratedExercise("Depth Jumps",                         4,  5,  0.0, 120, 9, ""),
-                    new GeneratedExercise("Rumänisches Kreuzheben",              5,  5, 95.0, 180, 8, ""),
-                    new GeneratedExercise("Beinbeuger an der Maschine",          4,  8, 50.0, 120, 8, ""),
-                    new GeneratedExercise("Bulgarische Split Kniebeuge",         3,  8, 32.0, 120, 7, ""),
-                    new GeneratedExercise("Beinpresse enge Fußstellung",         3, 10, 110.0, 90, 7, ""),
-                    new GeneratedExercise("Nordische Hamstring Curls",           3,  6,  0.0, 120, 9, ""),
-                    new GeneratedExercise("Einbeiniges Wadenheben",              4, 12,  0.0,  60, 7, "")
+                    new GeneratedExercise("Depth Jumps",                        4,  5,  0.0, 120, 9, ""),
+                    new GeneratedExercise("Rumänisches Kreuzheben",             5,  5, 95.0, 180, 8, ""),
+                    new GeneratedExercise("Nordische Hamstring Curls",          3,  6,  0.0, 120, 9, ""),
+                    new GeneratedExercise("Bulgarische Split Kniebeuge",        3,  8, 32.0, 120, 7, ""),
+                    new GeneratedExercise("Hip Thrust mit Langhantel",          4, 10, 80.0,  90, 7, ""),
+                    new GeneratedExercise("Beinpresse enge Fußstellung",        3, 10, 110.0, 90, 7, ""),
+                    new GeneratedExercise("Einbeiniges Wadenheben",             4, 12,  0.0,  60, 7, "")
             ));
             case 2 -> new GeneratedDay("Tag C – Beine", "Athletik & Power", List.of(
-                    new GeneratedExercise("Power Clean",                         4,  4, 60.0, 150, 9, ""),
-                    new GeneratedExercise("Kniebeuge mit Langhantel",            4,  6, 95.0, 150, 8, ""),
-                    new GeneratedExercise("Beinpresse",                          3,  8, 130.0,120, 7, ""),
-                    new GeneratedExercise("Ausfallschritte laufend",             3, 10, 20.0,  90, 7, ""),
-                    new GeneratedExercise("Rumänisches Kreuzheben",              3,  8, 80.0, 120, 7, ""),
-                    new GeneratedExercise("Beinbeuger an der Maschine",          3, 10, 45.0,  90, 7, ""),
-                    new GeneratedExercise("Wadenheben stehend",                  4, 15, 70.0,  60, 7, "")
+                    new GeneratedExercise("Power Clean",                        4,  4, 60.0, 150, 9, ""),
+                    new GeneratedExercise("Front Squat mit Langhantel",         4,  6, 80.0, 150, 8, ""),
+                    new GeneratedExercise("Beinpresse",                         3,  8, 130.0,120, 7, ""),
+                    new GeneratedExercise("Step-ups auf Kasten",                3, 10, 24.0,  90, 7, ""),
+                    new GeneratedExercise("Sumo Kreuzheben",                    3,  6, 100.0,150, 8, ""),
+                    new GeneratedExercise("Beinbeuger sitzend",                 3, 10, 45.0,  90, 7, ""),
+                    new GeneratedExercise("Wadenheben an der Maschine",         4, 15, 70.0,  60, 7, "")
             ));
             default -> new GeneratedDay("Tag C – Beine", "Quad-Fokus & Kraft, explosiv", List.of(
-                    new GeneratedExercise("Box Jumps",                           4,  5,  0.0, 120, 9, ""),
-                    new GeneratedExercise("Kniebeuge mit Langhantel",            5,  5, 100.0,180, 8, ""),
-                    new GeneratedExercise("Beinpresse",                          4,  8, 120.0,120, 7, ""),
-                    new GeneratedExercise("Rumänisches Kreuzheben",              4,  6,  90.0,150, 8, ""),
-                    new GeneratedExercise("Bulgarische Split Kniebeuge",         3,  8,  30.0,120, 7, ""),
-                    new GeneratedExercise("Beinbeuger an der Maschine",          3, 10,  45.0, 90, 7, ""),
-                    new GeneratedExercise("Wadenheben an der Maschine",          4, 15,  60.0, 60, 7, "")
+                    new GeneratedExercise("Box Jumps",                          4,  5,  0.0, 120, 9, ""),
+                    new GeneratedExercise("Kniebeuge mit Langhantel",           5,  5, 100.0,180, 8, ""),
+                    new GeneratedExercise("Hackenschmidt-Kniebeuge",            3,  8, 70.0, 120, 7, ""),
+                    new GeneratedExercise("Ausfallschritte laufend",            3, 10, 22.0,  90, 7, ""),
+                    new GeneratedExercise("Single-Leg RDL",                     3,  8, 24.0, 120, 7, ""),
+                    new GeneratedExercise("Beinbeuger an der Maschine",         3, 10, 45.0,  90, 7, ""),
+                    new GeneratedExercise("Donkey Calf Raises",                 4, 15,  0.0,  60, 7, "")
             ));
         };
 
-        // ── Push-Tag Varianten ────────────────────────────────────────────────
         GeneratedDay push = switch (variant) {
             case 1 -> new GeneratedDay("Tag A – Push", "Schulter-Fokus, Hypertrophie", List.of(
-                    new GeneratedExercise("Schulterdrücken mit Kurzhanteln",     5,  8, 32.0, 150, 8, ""),
-                    new GeneratedExercise("Bankdrücken mit Langhantel",          4,  8, 80.0, 120, 7, ""),
-                    new GeneratedExercise("Seitheben mit Kurzhanteln",           4, 12, 12.0,  60, 7, ""),
-                    new GeneratedExercise("Vorgebeugtes Seitheben",              4, 12,  8.0,  60, 7, ""),
-                    new GeneratedExercise("Arnold Press",                        3, 10, 22.0,  90, 7, ""),
-                    new GeneratedExercise("Trizeps Dips mit Zusatzgewicht",      3, 10, 20.0, 120, 7, ""),
-                    new GeneratedExercise("Schädelbrechter mit Langhantel",      3, 10, 25.0,  90, 7, "")
+                    new GeneratedExercise("Push Press",                         5,  6, 60.0, 150, 8, ""),
+                    new GeneratedExercise("Schrägbankdrücken mit Langhantel",   4,  8, 70.0, 120, 7, ""),
+                    new GeneratedExercise("Seitheben mit Kurzhanteln",          4, 12, 12.0,  60, 7, ""),
+                    new GeneratedExercise("Vorgebeugtes Seitheben",             4, 12,  8.0,  60, 7, ""),
+                    new GeneratedExercise("Arnold Press",                       3, 10, 22.0,  90, 7, ""),
+                    new GeneratedExercise("Trizeps Dips mit Zusatzgewicht",     3, 10, 20.0, 120, 7, ""),
+                    new GeneratedExercise("Schädelbrechter mit Langhantel",     3, 10, 25.0,  90, 7, "")
             ));
             case 2 -> new GeneratedDay("Tag A – Push", "Brust-Fokus, Kraft-Ausdauer", List.of(
-                    new GeneratedExercise("Schrägbankdrücken mit Langhantel",    4,  8, 70.0, 120, 8, ""),
-                    new GeneratedExercise("Bankdrücken mit Kurzhanteln",         4, 10, 36.0,  90, 7, ""),
-                    new GeneratedExercise("Kabelzug-Fliegenschlagen",            3, 15, 18.0,  60, 7, ""),
-                    new GeneratedExercise("Dips",                                4, 12,  0.0,  90, 7, ""),
-                    new GeneratedExercise("Frontdrücken stehend",                3,  8, 50.0, 120, 8, ""),
-                    new GeneratedExercise("Seitheben am Kabelzug",               3, 15, 12.0,  60, 6, ""),
-                    new GeneratedExercise("Overhead Trizeps Extension",          3, 12, 20.0,  90, 7, "")
+                    new GeneratedExercise("Guillotine Press",                   4,  8, 70.0, 120, 8, ""),
+                    new GeneratedExercise("Bankdrücken mit Kurzhanteln",        4, 10, 36.0,  90, 7, ""),
+                    new GeneratedExercise("Low-to-High Kabelzug",               3, 15, 15.0,  60, 7, ""),
+                    new GeneratedExercise("Dips",                               4, 12,  0.0,  90, 7, ""),
+                    new GeneratedExercise("Z-Press sitzend",                    3,  8, 40.0, 120, 8, ""),
+                    new GeneratedExercise("Seitheben am Kabelzug",              3, 15, 12.0,  60, 6, ""),
+                    new GeneratedExercise("Overhead Trizeps Extension KH",     3, 12, 18.0,  90, 7, "")
             ));
             default -> new GeneratedDay("Tag A – Push", "Brust, Schulter, Trizeps – Kraft", List.of(
-                    new GeneratedExercise("Bankdrücken mit Langhantel",          5,  5,  90.0, 180, 8, ""),
-                    new GeneratedExercise("Schrägbankdrücken mit Langhantel",    4,  6,  75.0, 150, 8, ""),
-                    new GeneratedExercise("Kurzhantel-Fliegenschlagen",          3, 10,  24.0,  90, 7, ""),
-                    new GeneratedExercise("Schulterdrücken mit Langhantel",      4,  6,  60.0, 150, 8, ""),
-                    new GeneratedExercise("Seitheben mit Kurzhanteln",           4, 12,  12.0,  60, 7, ""),
-                    new GeneratedExercise("Trizeps Dips mit Zusatzgewicht",      3, 10,  20.0, 120, 7, ""),
-                    new GeneratedExercise("Schädelbrechter mit Langhantel",      3, 10,  25.0,  90, 7, "")
+                    new GeneratedExercise("Bankdrücken mit Langhantel",         5,  5,  90.0, 180, 8, ""),
+                    new GeneratedExercise("Schrägbankdrücken mit Kurzhanteln",  4,  8,  30.0, 120, 8, ""),
+                    new GeneratedExercise("Kurzhantel-Fliegenschlagen",         3, 10,  24.0,  90, 7, ""),
+                    new GeneratedExercise("Schulterdrücken mit Langhantel",     4,  6,  60.0, 150, 8, ""),
+                    new GeneratedExercise("Maschinen-Seitheben",                4, 12,   0.0,  60, 7, ""),
+                    new GeneratedExercise("JM Press",                           3,  8,  30.0, 120, 7, ""),
+                    new GeneratedExercise("Trizeps Pushdown am Kabelzug",       3, 15,  25.0,  60, 7, "")
             ));
         };
 
-        // ── Pull-Tag Varianten ────────────────────────────────────────────────
         GeneratedDay pull = switch (variant) {
             case 1 -> new GeneratedDay("Tag B – Pull", "Rücken-Breite, Hypertrophie", List.of(
-                    new GeneratedExercise("Klimmzüge mit Zusatzgewicht",         5,  6, 20.0, 150, 8, ""),
-                    new GeneratedExercise("Latzug weit Griff",                   4, 10, 60.0,  90, 7, ""),
-                    new GeneratedExercise("Seilzug-Rudern sitzend",              4, 10, 55.0,  90, 7, ""),
-                    new GeneratedExercise("Einarmiges KH-Rudern",                3,  8, 36.0,  90, 7, ""),
-                    new GeneratedExercise("Face Pulls am Kabelzug",              3, 15, 22.0,  60, 6, ""),
-                    new GeneratedExercise("Hammer Curls mit Kurzhanteln",        4, 10, 18.0,  60, 7, ""),
-                    new GeneratedExercise("Konzentrations Curls",                3, 12, 14.0,  60, 6, "")
+                    new GeneratedExercise("Klimmzüge mit Zusatzgewicht",        5,  6, 20.0, 150, 8, ""),
+                    new GeneratedExercise("Latzug eng Griff",                   4, 10, 60.0,  90, 7, ""),
+                    new GeneratedExercise("Chest Supported Row",                4, 10, 50.0,  90, 7, ""),
+                    new GeneratedExercise("Meadows Row",                        3,  8, 36.0,  90, 7, ""),
+                    new GeneratedExercise("Face Pulls am Kabelzug",             3, 15, 22.0,  60, 6, ""),
+                    new GeneratedExercise("Incline Dumbbell Curl",              4, 10, 14.0,  60, 7, ""),
+                    new GeneratedExercise("Reverse Curls",                      3, 12, 12.0,  60, 6, "")
             ));
             case 2 -> new GeneratedDay("Tag B – Pull", "Rücken-Dicke, Athletik", List.of(
-                    new GeneratedExercise("Kreuzheben",                          5,  3, 130.0, 180, 9, ""),
-                    new GeneratedExercise("T-Bar Rudern",                        4,  8,  50.0, 120, 8, ""),
-                    new GeneratedExercise("Klimmzüge",                           4,  8,   0.0, 120, 8, ""),
-                    new GeneratedExercise("Einarmiges KH-Rudern",                3,  8,  34.0,  90, 7, ""),
-                    new GeneratedExercise("Kabelzug-Rudern weit",                3, 12,  40.0,  90, 7, ""),
-                    new GeneratedExercise("Bizeps-Curl mit Langhantel",          4,  8,  32.0,  90, 7, ""),
-                    new GeneratedExercise("Reverse Curls",                       3, 12,  12.0,  60, 6, "")
+                    new GeneratedExercise("Kreuzheben",                         5,  3, 130.0, 180, 9, ""),
+                    new GeneratedExercise("Pendlay Rudern",                     4,  6,  60.0, 120, 8, ""),
+                    new GeneratedExercise("Ringklimmzüge",                      4,  8,   0.0, 120, 8, ""),
+                    new GeneratedExercise("Kabelzug-Rudern weit",               3, 12,  40.0,  90, 7, ""),
+                    new GeneratedExercise("W-Raises",                           3, 15,   6.0,  60, 6, ""),
+                    new GeneratedExercise("Zottman Curl",                       4,  8,  16.0,  90, 7, ""),
+                    new GeneratedExercise("Kabelzug-Curl",                      3, 12,  20.0,  60, 6, "")
             ));
             default -> new GeneratedDay("Tag B – Pull", "Rücken, Bizeps – Kraft", List.of(
-                    new GeneratedExercise("Kreuzheben",                          5,  5, 120.0, 180, 9, ""),
-                    new GeneratedExercise("Klimmzüge mit Zusatzgewicht",         4,  6,  15.0, 150, 8, ""),
-                    new GeneratedExercise("Langhantelrudern",                    4,  6,  80.0, 150, 8, ""),
-                    new GeneratedExercise("Einarmiges Kurzhantelrudern",         3,  8,  32.0,  90, 7, ""),
-                    new GeneratedExercise("Face Pulls am Kabelzug",              3, 15,  20.0,  60, 6, ""),
-                    new GeneratedExercise("Bizeps-Curl mit Langhantel",          4,  8,  30.0,  90, 7, ""),
-                    new GeneratedExercise("Hammer Curls mit Kurzhanteln",        3, 12,  18.0,  60, 6, "")
+                    new GeneratedExercise("Kreuzheben",                         5,  5, 120.0, 180, 9, ""),
+                    new GeneratedExercise("Klimmzüge mit Zusatzgewicht",        4,  6,  15.0, 150, 8, ""),
+                    new GeneratedExercise("T-Bar Rudern",                       4,  6,  50.0, 150, 8, ""),
+                    new GeneratedExercise("Seal Row",                           3,  8,  40.0,  90, 7, ""),
+                    new GeneratedExercise("Band Pull-Aparts",                   3, 20,   0.0,  60, 6, ""),
+                    new GeneratedExercise("Bizeps-Curl mit Langhantel",         4,  8,  30.0,  90, 7, ""),
+                    new GeneratedExercise("Spider Curls",                       3, 12,  10.0,  60, 6, "")
             ));
         };
 
@@ -1160,7 +1632,7 @@ public class AiService {
                             .doOnNext(e -> log.warn("Ollama Text HTTP-Fehler: {}", e)).flatMap(e -> Mono.empty()))
                     .bodyToMono(Map.class)
                     .map(m -> (m != null && m.get("response") != null) ? (String) m.get("response") : null)
-                    .timeout(Duration.ofSeconds(30))
+                    .timeout(Duration.ofSeconds(60))
                     .onErrorResume(e -> { log.warn("Ollama Text: {}", e.getMessage()); return Mono.empty(); })
                     .block();
         } catch (Exception e) { log.error("Ollama Text Fehler: {}", e.getMessage()); return null; }
@@ -1171,7 +1643,8 @@ public class AiService {
         String fullPrompt = buildPlanSystemPrompt() + "\n\n" + userPrompt;
         Map<String, Object> body = Map.of("model", aiConfig.getOllama().getModel(),
                 "prompt", fullPrompt, "stream", false, "format", "json",
-                "options", Map.of("temperature", 0.15, "num_predict", 4000));
+                // ── Temperature erhöht: 0.15 → 0.35 für mehr Variabilität ──
+                "options", Map.of("temperature", 0.35, "num_predict", 4000));
         try {
             return webClient.post().uri(url).header("Content-Type", "application/json").bodyValue(body)
                     .retrieve()
@@ -1179,7 +1652,7 @@ public class AiService {
                             .doOnNext(e -> log.warn("Ollama JSON HTTP-Fehler: {}", e)).flatMap(e -> Mono.empty()))
                     .bodyToMono(Map.class)
                     .map(m -> (m != null && m.get("response") != null) ? (String) m.get("response") : null)
-                    .timeout(Duration.ofSeconds(120))
+                    .timeout(Duration.ofSeconds(400))
                     .onErrorResume(e -> { log.warn("Ollama JSON: {}", e.getMessage()); return Mono.empty(); })
                     .block();
         } catch (Exception e) { log.error("Ollama JSON Fehler: {}", e.getMessage()); return null; }
@@ -1191,7 +1664,7 @@ public class AiService {
         Map<String, Object> body = Map.of("model", aiConfig.getOpenai().getModel(),
                 "messages", List.of(Map.of("role", "system", "content", systemPrompt),
                         Map.of("role", "user", "content", userPrompt)),
-                "temperature", 0.3, "max_tokens", 4000);
+                "temperature", 0.4, "max_tokens", 4000);
         try {
             return webClient.post().uri(url).header("Content-Type", "application/json")
                     .header("Authorization", "Bearer " + aiConfig.getOpenai().getApiKey())
@@ -1206,7 +1679,7 @@ public class AiService {
                         var msg = (Map<String, Object>) choices.get(0).get("message");
                         return msg != null ? (String) msg.get("content") : null;
                     })
-                    .timeout(Duration.ofSeconds(60))
+                    .timeout(Duration.ofSeconds(150))
                     .onErrorResume(e -> { log.warn("OpenAI: {}", e.getMessage()); return Mono.empty(); })
                     .block();
         } catch (Exception e) { log.error("OpenAI Fehler: {}", e.getMessage()); return null; }

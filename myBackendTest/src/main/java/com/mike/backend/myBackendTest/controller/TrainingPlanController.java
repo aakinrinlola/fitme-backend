@@ -8,6 +8,7 @@ import com.mike.backend.myBackendTest.service.TrainingService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.LinkedHashMap;
@@ -43,6 +44,7 @@ public class TrainingPlanController {
     }
 
     @GetMapping
+    @Transactional(readOnly = true)  // ← NEU
     public ResponseEntity<List<Map<String, Object>>> getMyPlans() {
         Long userId = securityHelper.getCurrentUserId();
         return ResponseEntity.ok(
@@ -124,11 +126,22 @@ public class TrainingPlanController {
 
     private Map<String, Object> buildSummary(TrainingPlan plan, String message) {
         Map<String, Object> map = new LinkedHashMap<>();
-        map.put("id",                      plan.getId());
-        map.put("planName",                plan.getPlanName());
-        map.put("exerciseCount",           plan.getExercises().size());
+        map.put("id",          plan.getId());
+        map.put("planName",    plan.getPlanName());
+
+        // ── Exercises size sicher abfragen ──────────────────────────
+        int exerciseCount = 0;
+        try {
+            exerciseCount = plan.getExercises().size();
+        } catch (Exception e) {
+            exerciseCount = 0; // Fallback wenn lazy nicht geladen
+        }
+        map.put("exerciseCount", exerciseCount);
+        // ────────────────────────────────────────────────────────────
+
         map.put("active",                  plan.isActive());
-        map.put("activeUntil",             plan.getActiveUntil() != null ? plan.getActiveUntil().toString() : null);
+        map.put("activeUntil",             plan.getActiveUntil() != null
+                ? plan.getActiveUntil().toString() : null);
         map.put("currentWeek",             plan.getCurrentWeek());
         map.put("planDurationWeeks",       plan.getPlanDurationWeeks());
         map.put("feedbackAllowedThisWeek", plan.isFeedbackAllowedThisWeek());
@@ -137,4 +150,5 @@ public class TrainingPlanController {
         if (message != null) map.put("message", message);
         return map;
     }
+
 }
