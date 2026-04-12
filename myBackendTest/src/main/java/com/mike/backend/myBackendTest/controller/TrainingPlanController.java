@@ -89,6 +89,15 @@ public class TrainingPlanController {
         return ResponseEntity.ok(resp);
     }
 
+    @PutMapping("/{planId}")
+    public ResponseEntity<Map<String, Object>> updatePlan(
+            @PathVariable Long planId,
+            @Valid @RequestBody CreateTrainingPlanRequest request) {
+        Long userId = securityHelper.getCurrentUserId();
+        TrainingPlan plan = trainingService.updatePlan(planId, userId, request, securityHelper.isAdmin());
+        return ResponseEntity.ok(buildSummary(plan, "Plan erfolgreich aktualisiert"));
+    }
+
     @GetMapping("/{planId}/feedback-availability")
     public ResponseEntity<Map<String, Object>> getFeedbackAvailability(@PathVariable Long planId) {
         Long userId = securityHelper.getCurrentUserId();

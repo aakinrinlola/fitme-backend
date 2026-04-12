@@ -14,6 +14,8 @@ public record CreateTrainingPlanRequest(
         @Positive int reps,
         double weightKg,
         int restSeconds,
-        Integer targetRpe
+        Integer targetRpe,
+        String trainingDay,
+        String description
     ) {}
 }

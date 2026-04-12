@@ -55,7 +55,7 @@ public class TrainingService {
 
         int order = 0;
         for (var ex : req.exercises()) {
-            plan.getExercises().add(buildExercise(ex, plan, order++, null));
+            plan.getExercises().add(buildExercise(ex, plan, order++, ex.trainingDay()));
         }
         return planRepo.save(plan);
     }
@@ -86,7 +86,8 @@ public class TrainingService {
             for (AiService.GeneratedExercise genEx : day.exercises()) {
                 var exInput = new CreateTrainingPlanRequest.ExerciseInput(
                         genEx.exerciseName(), genEx.sets(), genEx.reps(),
-                        genEx.weightKg(), genEx.restSeconds(), genEx.targetRpe());
+                        genEx.weightKg(), genEx.restSeconds(), genEx.targetRpe(),
+                        day.dayName(), genEx.description());
 
                 PlannedExercise pe = buildExercise(exInput, plan, order++, day.dayName());
                 if (genEx.description() != null && !genEx.description().isBlank()) {
@@ -196,6 +197,28 @@ public class TrainingService {
                 adjustments, new AdherenceStats(total, completed, pct));
     }
 
+    // ===================== PLAN AKTUALISIEREN =====================
+
+    public TrainingPlan updatePlan(Long planId, Long userId, CreateTrainingPlanRequest req, boolean isAdmin) {
+        TrainingPlan plan = planRepo.findByIdWithExercises(planId)
+                .orElseThrow(() -> new ResourceNotFoundException("Plan nicht gefunden: " + planId));
+
+        if (!plan.getUser().getId().equals(userId) && !isAdmin) {
+            throw new SecurityException("Zugriff verweigert");
+        }
+
+        plan.setPlanName(req.planName());
+        plan.setDescription(req.description());
+        plan.getExercises().clear();
+
+        int order = 0;
+        for (var ex : req.exercises()) {
+            plan.getExercises().add(buildExercise(ex, plan, order++, ex.trainingDay()));
+        }
+
+        return planRepo.save(plan);
+    }
+
     // ===================== STATUS =====================
 
     public TrainingPlan setActiveStatus(Long planId, Long userId, boolean active) {
@@ -246,6 +269,9 @@ public class TrainingService {
         ex.setExerciseOrder(order);
         ex.setTrainingPlan(plan);
         ex.setTrainingDay(trainingDay);
+        if (input.description() != null && !input.description().isBlank()) {
+            ex.setDescription(input.description());
+        }
         return ex;
     }
 
