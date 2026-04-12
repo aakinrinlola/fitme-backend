@@ -14,6 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
  * Authentifizierungs-Service.
  *
  * Verantwortlich für:
+ *
+ *
  * - Registrierung (Passwort hashen, User anlegen)
  * - Login (Passwort prüfen, JWT erstellen)
  * - Token-Refresh (neuen Access-Token ausstellen)
@@ -37,7 +39,7 @@ public class AuthService {
     }
 
     /**
-     * Registriert einen neuen Benutzer.
+     * so registriere ich einen neuen Benutzer.
      *
      * @throws IllegalArgumentException wenn Username oder E-Mail bereits vergeben
      */

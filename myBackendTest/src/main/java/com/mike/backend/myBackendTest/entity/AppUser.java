@@ -39,8 +39,20 @@ public class AppUser {
     @Column(length = 300)
     private String motivationalMessage;
 
+    /**
+     * Steuert, ob der Body-Scan-Widget im Dashboard angezeigt wird.
+     * Nur sichtbar, wenn auch Body-Scan-Daten vorhanden sind.
+     */
+    @Column(name = "show_body_scan_in_dashboard",
+            nullable = false,
+            columnDefinition = "boolean default false")
+    private boolean showBodyScanInDashboard = false;
+
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<TrainingPlan> trainingPlans = new ArrayList<>();
+
+    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<BodyScanEntry> bodyScanEntries = new ArrayList<>();
 
     private LocalDateTime createdAt = LocalDateTime.now();
     private boolean enabled = true;
@@ -88,8 +100,16 @@ public class AppUser {
     public String getMotivationalMessage() { return motivationalMessage; }
     public void setMotivationalMessage(String motivationalMessage) { this.motivationalMessage = motivationalMessage; }
 
+    public boolean isShowBodyScanInDashboard() { return showBodyScanInDashboard; }
+    public void setShowBodyScanInDashboard(boolean showBodyScanInDashboard) {
+        this.showBodyScanInDashboard = showBodyScanInDashboard;
+    }
+
     public List<TrainingPlan> getTrainingPlans() { return trainingPlans; }
     public void setTrainingPlans(List<TrainingPlan> trainingPlans) { this.trainingPlans = trainingPlans; }
+
+    public List<BodyScanEntry> getBodyScanEntries() { return bodyScanEntries; }
+    public void setBodyScanEntries(List<BodyScanEntry> bodyScanEntries) { this.bodyScanEntries = bodyScanEntries; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

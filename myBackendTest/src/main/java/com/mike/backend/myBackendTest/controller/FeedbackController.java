@@ -31,8 +31,8 @@ public class FeedbackController {
     }
 
     /**
-     * Trainings-Feedback einreichen.
-     * Die User-ID wird aus dem JWT extrahiert → der User kann nur für sich selbst Feedback abgeben.
+     * Trainings-Feedback einreichen
+     * Die User-ID wird aus dem JWT extrahiert →  USEERR kann nur für sich selbst Feedback abgeben
      */
     @PostMapping
     public ResponseEntity<SessionFeedbackResponse> submitFeedback(
@@ -44,8 +44,8 @@ public class FeedbackController {
     }
 
     /**
-     * Eigene Trainingshistorie abrufen.
-     * Gibt nur die Sessions des authentifizierten Users zurück.
+     * Eigene Trainingshistorie abrufen
+     * Gibt nur die Sessions des authentifizierten Users zurück
      */
     @GetMapping("/history")
     public ResponseEntity<List<Map<String, Object>>> getMyHistory() {

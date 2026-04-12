@@ -18,7 +18,7 @@ public record GeneratePlanRequest(
         @Min(1) @Max(7)
         Integer daysPerWeek,
 
-        /** Legacy-Freitext, intern mit focusMuscleGroups gemergt */
+
         String focusMuscles,
 
         String experienceLevel,
@@ -29,7 +29,7 @@ public record GeneratePlanRequest(
         @Min(3) @Max(12)
         Integer sleepHoursPerNight,
 
-        /** LOW / MODERATE / HIGH */
+
         String stressLevel,
 
         String injuries,
@@ -40,19 +40,6 @@ public record GeneratePlanRequest(
 
         Boolean includeMobilityPlan,
 
-        /**
-         * Steuert die Tages-Aufteilung wenn Fokus-Muskelgruppen gewählt sind.
-         *
-         * "DOUBLE_FOCUS" → Fokus-Muskelgruppe bekommt 2 Trainingstage mit
-         *                  unterschiedlichem Schwerpunkt (z.B. Beine-Quad + Beine-Hinge).
-         *                  Bei 3 Tagen: 2 Fokus-Tage + 1 anderer Tag.
-         *                  Bei 2 Tagen: 2 Fokus-Tage.
-         *
-         * "BALANCED"     → Klassischer Split (Push/Pull/Legs o.ä.),
-         *                  Fokus-Tag kommt als Tag A zuerst.
-         *
-         * null           → Standard (= BALANCED-Verhalten)
-         */
         String focusStrategy
 
 ) {}

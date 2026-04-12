@@ -76,6 +76,11 @@ public class UserService {
             );
         }
 
+        // showBodyScanInDashboard: null = nicht anfassen, Boolean = setzen
+        if (req.showBodyScanInDashboard() != null) {
+            user.setShowBodyScanInDashboard(req.showBodyScanInDashboard());
+        }
+
         return userRepository.save(user);
     }
 

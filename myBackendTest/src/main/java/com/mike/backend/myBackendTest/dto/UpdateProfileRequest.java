@@ -8,11 +8,12 @@ import jakarta.validation.constraints.Size;
  * Alle Felder sind optional — nur die mitgeschickten Felder werden aktualisiert.
  */
 public record UpdateProfileRequest(
-    @Size(min = 3, max = 50) String username,
-    @Email String email,
-    Integer age,
-    Double weightKg,
-    Double heightCm,
-    String fitnessLevel,
-    @Size(max = 300) String motivationalMessage
+        @Size(min = 3, max = 50) String username,
+        @Email String email,
+        Integer age,
+        Double weightKg,
+        Double heightCm,
+        String fitnessLevel,
+        @Size(max = 300) String motivationalMessage,
+        Boolean showBodyScanInDashboard
 ) {}

@@ -20,8 +20,11 @@ public class AiService {
 
     private static final Logger log = LoggerFactory.getLogger(AiService.class);
 
+    //welcher KI Provider
     private final AiConfig aiConfig;
+    //für die HTTP Requests
     private final WebClient webClient;
+    //JSON zu parsen
     private final ObjectMapper objectMapper;
 
     public AiService(AiConfig aiConfig, WebClient webClient, ObjectMapper objectMapper) {
@@ -30,9 +33,9 @@ public class AiService {
         this.objectMapper = objectMapper;
     }
 
-    // =========================================================================
+
     // Datenstrukturen
-    // =========================================================================
+
 
     public record GeneratedDay(String dayName, String focus, List<GeneratedExercise> exercises) {}
     public record GeneratedPlan(String planName, String description, List<GeneratedDay> days) {}
@@ -40,9 +43,7 @@ public class AiService {
                                     double weightKg, int restSeconds, int targetRpe,
                                     String description) {}
 
-    // =========================================================================
     // EXERCISE POOL — strukturierte Übungsdatenbank nach Bewegungsmuster
-    // =========================================================================
 
     private static final Map<String, List<String>> EXERCISE_POOL;
     static {
@@ -139,9 +140,26 @@ public class AiService {
         EXERCISE_POOL = Collections.unmodifiableMap(pool);
     }
 
-    // =========================================================================
+    private static final List<Map<String, Object>> EXPLOSIVE_EXERCISE_CONFIG;
+    static {
+        EXPLOSIVE_EXERCISE_CONFIG = List.of(
+                Map.of("name", "Box Jumps",           "sets", 4, "reps", 5, "rest", 120, "rpe", 8, "weight", 0.0),
+                Map.of("name", "Jump Squats",          "sets", 4, "reps", 6, "rest", 90,  "rpe", 8, "weight", 0.0),
+                Map.of("name", "Broad Jumps",          "sets", 3, "reps", 5, "rest", 120, "rpe", 8, "weight", 0.0),
+                Map.of("name", "Depth Jumps",          "sets", 4, "reps", 5, "rest", 120, "rpe", 9, "weight", 0.0),
+                Map.of("name", "Kettlebell Swing",     "sets", 4, "reps", 8, "rest", 90,  "rpe", 8, "weight", 24.0),
+                Map.of("name", "Medball Slam",         "sets", 4, "reps", 6, "rest", 90,  "rpe", 8, "weight", 0.0),
+                Map.of("name", "Laterale Sprünge",     "sets", 3, "reps", 8, "rest", 90,  "rpe", 7, "weight", 0.0),
+                Map.of("name", "Einbeinige Box Jumps", "sets", 3, "reps", 5, "rest", 120, "rpe", 8, "weight", 0.0),
+                Map.of("name", "Bounding",             "sets", 3, "reps", 6, "rest", 120, "rpe", 8, "weight", 0.0),
+                Map.of("name", "Split Jumps",          "sets", 4, "reps", 6, "rest", 90,  "rpe", 8, "weight", 0.0),
+                Map.of("name", "Power Clean",          "sets", 4, "reps", 4, "rest", 150, "rpe", 9, "weight", 60.0),
+                Map.of("name", "Hang Clean",           "sets", 4, "reps", 4, "rest", 150, "rpe", 9, "weight", 55.0)
+        );
+    }
+
+
     // METHODE 1: Erklärung nach Feedback
-    // =========================================================================
 
     public String generateExplanation(AppUser user, int sessionRpe, String userNote,
                                       List<ExerciseAdjustment> adjustments) {
@@ -160,9 +178,8 @@ public class AiService {
         return buildFallbackExplanation(sessionRpe, adjustments);
     }
 
-    // =========================================================================
     // METHODE 2: Trainingsplan generieren
-    // =========================================================================
+
 
     public GeneratedPlan generateTrainingPlan(AppUser user, GeneratePlanRequest request) {
         String userPrompt = buildPlanUserPrompt(user, request);
@@ -602,6 +619,9 @@ public class AiService {
      */
     private GeneratedPlan ensureExplosiveOnLegDays(GeneratedPlan plan) {
         List<GeneratedDay> days = new ArrayList<>();
+        // Track schon verwendete explosive Übungen über alle Tage
+        Set<String> usedExplosive = new LinkedHashSet<>();
+
         for (GeneratedDay day : plan.days()) {
             if ("Mobilitätsblock".equalsIgnoreCase(day.dayName())) {
                 days.add(day);
@@ -614,23 +634,24 @@ public class AiService {
 
             List<GeneratedExercise> exercises = new ArrayList<>(day.exercises());
 
-            // Explosive Übung suchen
+            // Bereits vorhandene explosive Übungen im Tag erfassen
             int explosiveIndex = -1;
             for (int i = 0; i < exercises.size(); i++) {
                 if ("explosive_legs".equals(findMovementCategory(exercises.get(i).exerciseName()))) {
+                    usedExplosive.add(normalizeExerciseName(exercises.get(i).exerciseName()));
                     explosiveIndex = i;
                     break;
                 }
             }
 
             if (explosiveIndex < 0) {
-                // Keine explosive Übung → hinzufügen
-                GeneratedExercise explosive = new GeneratedExercise("Box Jumps", 3, 6, 0.0, 90, 8, "");
+                // Keine explosive Übung → rotierende Auswahl, noch nicht verwendet
+                GeneratedExercise explosive = pickRotatingExplosive(usedExplosive, plan.planName());
+                usedExplosive.add(normalizeExerciseName(explosive.exerciseName()));
                 exercises.add(0, explosive);
                 if (exercises.size() > 8) exercises.remove(exercises.size() - 1);
-                log.info("Explosive Übung auf Bein-Tag '{}' ergänzt", day.dayName());
+                log.info("Explosive Übung '{}' auf Bein-Tag '{}' ergänzt", explosive.exerciseName(), day.dayName());
             } else if (explosiveIndex > 0) {
-                // Explosive Übung an erste Position verschieben
                 GeneratedExercise explosive = exercises.remove(explosiveIndex);
                 exercises.add(0, explosive);
                 log.info("Explosive Übung '{}' → Position 1 in '{}'", explosive.exerciseName(), day.dayName());
@@ -640,6 +661,34 @@ public class AiService {
         }
         return new GeneratedPlan(plan.planName(), plan.description(), days);
     }
+
+    private GeneratedExercise pickRotatingExplosive(Set<String> alreadyUsed, String planName) {
+        int seed = Math.abs(planName != null ? planName.hashCode() : 0)
+                + (int)(System.currentTimeMillis() % 1000);
+
+        for (int offset = 0; offset < EXPLOSIVE_EXERCISE_CONFIG.size(); offset++) {
+            int idx = (seed + offset) % EXPLOSIVE_EXERCISE_CONFIG.size();
+            Map<String, Object> cfg = EXPLOSIVE_EXERCISE_CONFIG.get(idx);
+            String name = (String) cfg.get("name");
+            if (!alreadyUsed.contains(normalizeExerciseName(name))) {
+                return new GeneratedExercise(
+                        name,
+                        (int) cfg.get("sets"),
+                        (int) cfg.get("reps"),
+                        (double) cfg.get("weight"),
+                        (int) cfg.get("rest"),
+                        (int) cfg.get("rpe"),
+                        ""
+                );
+            }
+        }
+        // Fallback wenn alle schon verwendet
+        Map<String, Object> cfg = EXPLOSIVE_EXERCISE_CONFIG.get(seed % EXPLOSIVE_EXERCISE_CONFIG.size());
+        return new GeneratedExercise((String)cfg.get("name"), (int)cfg.get("sets"),
+                (int)cfg.get("reps"), (double)cfg.get("weight"),
+                (int)cfg.get("rest"), (int)cfg.get("rpe"), "");
+    }
+
 
     // ── 3. Übungsanzahl sicherstellen ─────────────────────────────────────────
 
@@ -1257,9 +1306,8 @@ public class AiService {
             """;
     }
 
-    // =========================================================================
+
     // User-Prompt
-    // =========================================================================
 
     private String buildPlanUserPrompt(AppUser user, GeneratePlanRequest request) {
         List<String> focusParts = new ArrayList<>();
@@ -1688,9 +1736,7 @@ public class AiService {
                 + "    ✓ PFLICHT: Keine einzige Übung darf in zwei verschiedenen Trainingstagen vorkommen.\n\n";
     }
 
-    // =========================================================================
     // JSON-Parser
-    // =========================================================================
 
     private GeneratedPlan parseGeneratedPlan(String rawResponse) {
         try {
@@ -1765,16 +1811,14 @@ public class AiService {
 
     private int clamp(int v, int min, int max) { return Math.max(min, Math.min(max, v)); }
 
-    // =========================================================================
     // Fallback-Plan
-    // =========================================================================
 
     private GeneratedPlan buildFallbackPlan(GeneratePlanRequest request) {
         String planName   = request.planName() != null ? request.planName() : "Trainingsplan";
         String level      = resolveRawLevel(request, null);
         int daysPerWeek   = request.daysPerWeek() != null ? request.daysPerWeek() : 3;
         int numDayPlans   = calcNumDayPlans(daysPerWeek);
-        int variant       = (int) (System.currentTimeMillis() % 3);
+        int variant       = (int) (System.currentTimeMillis() % 4);
 
         List<String> dayNames = List.of("Tag A", "Tag B", "Tag C");
         String rotation   = buildRotationHint(daysPerWeek, numDayPlans, dayNames);
@@ -1919,84 +1963,112 @@ public class AiService {
     // ── Fallback-Tage: Fortgeschritten (je 6 Übungen, 3 Varianten) ──────────
 
     private List<GeneratedDay> buildIntermediateDays(int variant) {
+
+        // ── Bein-Tage: 4 Varianten, jede mit anderer explosiver Übung ────────
         GeneratedDay legs = switch (variant) {
             case 1 -> new GeneratedDay("Tag C – Beine", "Hamstring-Fokus, explosiv", List.of(
-                    new GeneratedExercise("Broad Jumps",                       3,  6,  0.0,  90, 8, ""),
-                    new GeneratedExercise("Rumänisches Kreuzheben",            4,  8, 65.0, 120, 7, ""),
-                    new GeneratedExercise("Beinbeuger liegend",                3, 10, 40.0,  90, 7, ""),
-                    new GeneratedExercise("Bulgarische Split Kniebeuge",       3, 10, 18.0,  90, 7, ""),
-                    new GeneratedExercise("Hip Thrust mit Langhantel",         3, 12, 60.0,  90, 7, ""),
-                    new GeneratedExercise("Einbeiniges Wadenheben",            3, 15,  0.0,  60, 6, "")
+                    new GeneratedExercise("Broad Jumps",                         3,  6,  0.0,  90, 8, ""),
+                    new GeneratedExercise("Rumänisches Kreuzheben",              4,  8, 65.0, 120, 7, ""),
+                    new GeneratedExercise("Beinbeuger liegend",                  3, 10, 40.0,  90, 7, ""),
+                    new GeneratedExercise("Bulgarische Split Kniebeuge",         3, 10, 18.0,  90, 7, ""),
+                    new GeneratedExercise("Hip Thrust mit Langhantel",           3, 12, 60.0,  90, 7, ""),
+                    new GeneratedExercise("Einbeiniges Wadenheben",              3, 15,  0.0,  60, 6, "")
             ));
             case 2 -> new GeneratedDay("Tag C – Beine", "Kraft-Ausdauer, explosiv", List.of(
-                    new GeneratedExercise("Kettlebell Swing",                  4,  8, 24.0,  90, 8, ""),
-                    new GeneratedExercise("Front Squat mit Langhantel",        4, 10, 50.0,  90, 7, ""),
-                    new GeneratedExercise("Beinpresse weite Fußstellung",      3, 12, 80.0,  90, 7, ""),
-                    new GeneratedExercise("Nordische Hamstring Curls",         3,  6,  0.0, 120, 8, ""),
-                    new GeneratedExercise("Step-ups auf Kasten",               3, 10, 16.0,  90, 7, ""),
-                    new GeneratedExercise("Wadenheben sitzend",                3, 15, 30.0,  60, 6, "")
+                    new GeneratedExercise("Kettlebell Swing",                    4,  8, 24.0,  90, 8, ""),
+                    new GeneratedExercise("Front Squat mit Langhantel",          4, 10, 50.0,  90, 7, ""),
+                    new GeneratedExercise("Beinpresse weite Fußstellung",        3, 12, 80.0,  90, 7, ""),
+                    new GeneratedExercise("Nordische Hamstring Curls",           3,  6,  0.0, 120, 8, ""),
+                    new GeneratedExercise("Step-ups auf Kasten",                 3, 10, 16.0,  90, 7, ""),
+                    new GeneratedExercise("Wadenheben sitzend",                  3, 15, 30.0,  60, 6, "")
+            ));
+            case 3 -> new GeneratedDay("Tag C – Beine", "Unilateral & Athletik", List.of(
+                    new GeneratedExercise("Laterale Sprünge",                    3,  8,  0.0,  90, 8, ""),
+                    new GeneratedExercise("Bulgarische Split Kniebeuge",         4,  8, 20.0, 120, 7, ""),
+                    new GeneratedExercise("Rumänisches Kreuzheben",              4,  8, 60.0, 120, 7, ""),
+                    new GeneratedExercise("Step-ups auf Kasten (explosiv)",      3, 10, 16.0,  90, 7, ""),
+                    new GeneratedExercise("Beinbeuger an der Maschine",          3, 12, 35.0,  90, 7, ""),
+                    new GeneratedExercise("Wadenheben stehend",                  3, 15,  0.0,  60, 6, "")
             ));
             default -> new GeneratedDay("Tag C – Beine", "Quad-Fokus, explosiv", List.of(
-                    new GeneratedExercise("Jump Squats",                       3,  8,  0.0,  90, 8, ""),
-                    new GeneratedExercise("Kniebeuge mit Langhantel",          4,  8, 70.0, 120, 7, ""),
-                    new GeneratedExercise("Beinpresse enge Fußstellung",       3, 10, 80.0,  90, 7, ""),
-                    new GeneratedExercise("Rumänisches Kreuzheben",            3, 10, 60.0,  90, 7, ""),
-                    new GeneratedExercise("Ausfallschritte mit Kurzhanteln",   3, 12, 16.0,  90, 7, ""),
-                    new GeneratedExercise("Beinbeuger an der Maschine",        3, 12, 35.0,  60, 6, "")
+                    new GeneratedExercise("Jump Squats",                         3,  8,  0.0,  90, 8, ""),
+                    new GeneratedExercise("Kniebeuge mit Langhantel",            4,  8, 70.0, 120, 7, ""),
+                    new GeneratedExercise("Beinpresse enge Fußstellung",         3, 10, 80.0,  90, 7, ""),
+                    new GeneratedExercise("Rumänisches Kreuzheben",              3, 10, 60.0,  90, 7, ""),
+                    new GeneratedExercise("Ausfallschritte mit Kurzhanteln",     3, 12, 16.0,  90, 7, ""),
+                    new GeneratedExercise("Beinbeuger an der Maschine",          3, 12, 35.0,  60, 6, "")
             ));
         };
 
+        // ── Push-Tage: 4 Varianten ────────────────────────────────────────────
         GeneratedDay push = switch (variant) {
             case 1 -> new GeneratedDay("Tag A – Push", "Schulter-Fokus, Hypertrophie", List.of(
-                    new GeneratedExercise("Schulterdrücken mit Langhantel",     4, 10, 35.0,  90, 7, ""),
-                    new GeneratedExercise("Schrägbankdrücken mit Kurzhanteln",  3, 10, 22.0,  90, 7, ""),
-                    new GeneratedExercise("Seitheben mit Kurzhanteln",          4, 12,  8.0,  60, 7, ""),
-                    new GeneratedExercise("Vorgebeugtes Seitheben",             3, 12,  6.0,  60, 6, ""),
-                    new GeneratedExercise("Schädelbrechter mit Langhantel",     3, 12, 20.0,  90, 7, ""),
-                    new GeneratedExercise("Overhead Trizeps Extension KH",     3, 12, 12.0,  60, 6, "")
+                    new GeneratedExercise("Schulterdrücken mit Langhantel",      4, 10, 35.0,  90, 7, ""),
+                    new GeneratedExercise("Schrägbankdrücken mit Kurzhanteln",   3, 10, 22.0,  90, 7, ""),
+                    new GeneratedExercise("Seitheben mit Kurzhanteln",           4, 12,  8.0,  60, 7, ""),
+                    new GeneratedExercise("Vorgebeugtes Seitheben",              3, 12,  6.0,  60, 6, ""),
+                    new GeneratedExercise("Schädelbrechter mit Langhantel",      3, 12, 20.0,  90, 7, ""),
+                    new GeneratedExercise("Overhead Trizeps Extension KH",      3, 12, 12.0,  60, 6, "")
             ));
             case 2 -> new GeneratedDay("Tag A – Push", "Brust-Fokus, Kraft-Ausdauer", List.of(
-                    new GeneratedExercise("Bankdrücken mit Kurzhanteln",        4, 10, 28.0,  90, 7, ""),
-                    new GeneratedExercise("Kabelzug-Fliegenschlagen",           3, 15, 15.0,  60, 7, ""),
-                    new GeneratedExercise("Dips",                               3, 12,  0.0,  90, 7, ""),
-                    new GeneratedExercise("Arnold Press",                       3, 12, 14.0,  90, 7, ""),
-                    new GeneratedExercise("Seitheben am Kabelzug",              3, 15, 10.0,  60, 6, ""),
-                    new GeneratedExercise("Trizeps Pushdown am Kabelzug",       3, 12, 20.0,  60, 6, "")
+                    new GeneratedExercise("Bankdrücken mit Kurzhanteln",         4, 10, 28.0,  90, 7, ""),
+                    new GeneratedExercise("Kabelzug-Fliegenschlagen",            3, 15, 15.0,  60, 7, ""),
+                    new GeneratedExercise("Dips",                                3, 12,  0.0,  90, 7, ""),
+                    new GeneratedExercise("Arnold Press",                        3, 12, 14.0,  90, 7, ""),
+                    new GeneratedExercise("Seitheben am Kabelzug",               3, 15, 10.0,  60, 6, ""),
+                    new GeneratedExercise("Trizeps Pushdown am Kabelzug",        3, 12, 20.0,  60, 6, "")
+            ));
+            case 3 -> new GeneratedDay("Tag A – Push", "Brust & Schulter variiert", List.of(
+                    new GeneratedExercise("Schrägbankdrücken mit Langhantel",    4,  8, 55.0, 120, 7, ""),
+                    new GeneratedExercise("Bankdrücken mit Langhantel",          3,  8, 65.0, 120, 7, ""),
+                    new GeneratedExercise("Pec Deck Maschine",                   3, 12,  0.0,  90, 7, ""),
+                    new GeneratedExercise("Push Press",                          4,  6, 45.0, 120, 7, ""),
+                    new GeneratedExercise("Maschinen-Seitheben",                 3, 15,  0.0,  60, 6, ""),
+                    new GeneratedExercise("Nahgriff Bankdrücken",                3, 10, 50.0,  90, 7, "")
             ));
             default -> new GeneratedDay("Tag A – Push", "Brust, Schulter, Trizeps", List.of(
-                    new GeneratedExercise("Bankdrücken mit Langhantel",         4,  8, 60.0, 120, 7, ""),
-                    new GeneratedExercise("Schrägbankdrücken mit Langhantel",   3, 10, 45.0,  90, 7, ""),
-                    new GeneratedExercise("Kurzhantel-Fliegenschlagen",         3, 12, 16.0,  90, 7, ""),
-                    new GeneratedExercise("Schulterdrücken mit Kurzhanteln",    3, 10, 20.0,  90, 7, ""),
-                    new GeneratedExercise("Maschinen-Seitheben",                3, 12,  0.0,  60, 6, ""),
-                    new GeneratedExercise("Trizeps Dips mit Zusatzgewicht",     3, 10, 10.0,  90, 7, "")
+                    new GeneratedExercise("Bankdrücken mit Langhantel",          4,  8, 60.0, 120, 7, ""),
+                    new GeneratedExercise("Schrägbankdrücken mit Langhantel",    3, 10, 45.0,  90, 7, ""),
+                    new GeneratedExercise("Kurzhantel-Fliegenschlagen",          3, 12, 16.0,  90, 7, ""),
+                    new GeneratedExercise("Schulterdrücken mit Kurzhanteln",     3, 10, 20.0,  90, 7, ""),
+                    new GeneratedExercise("Maschinen-Seitheben",                 3, 12,  0.0,  60, 6, ""),
+                    new GeneratedExercise("Trizeps Dips mit Zusatzgewicht",      3, 10, 10.0,  90, 7, "")
             ));
         };
 
+        // ── Pull-Tage: 4 Varianten ────────────────────────────────────────────
         GeneratedDay pull = switch (variant) {
             case 1 -> new GeneratedDay("Tag B – Pull", "Rücken-Breite, Hypertrophie", List.of(
-                    new GeneratedExercise("Klimmzüge mit Zusatzgewicht",        4,  8, 10.0, 120, 7, ""),
-                    new GeneratedExercise("Latzug Untergriff",                  3, 10, 50.0,  90, 7, ""),
-                    new GeneratedExercise("Einarmiges Kurzhantelrudern",        3, 10, 24.0,  90, 7, ""),
-                    new GeneratedExercise("Face Pulls am Kabelzug",             3, 15, 20.0,  60, 6, ""),
-                    new GeneratedExercise("Hammer Curls mit Kurzhanteln",       3, 12, 14.0,  60, 6, ""),
-                    new GeneratedExercise("Konzentrations Curls",               3, 12, 10.0,  60, 6, "")
+                    new GeneratedExercise("Klimmzüge mit Zusatzgewicht",         4,  8, 10.0, 120, 7, ""),
+                    new GeneratedExercise("Latzug Untergriff",                   3, 10, 50.0,  90, 7, ""),
+                    new GeneratedExercise("Einarmiges Kurzhantelrudern",         3, 10, 24.0,  90, 7, ""),
+                    new GeneratedExercise("Face Pulls am Kabelzug",              3, 15, 20.0,  60, 6, ""),
+                    new GeneratedExercise("Hammer Curls mit Kurzhanteln",        3, 12, 14.0,  60, 6, ""),
+                    new GeneratedExercise("Konzentrations Curls",                3, 12, 10.0,  60, 6, "")
             ));
             case 2 -> new GeneratedDay("Tag B – Pull", "Rücken-Dicke, Kraft", List.of(
-                    new GeneratedExercise("Langhantelrudern",                   5,  6, 55.0, 150, 8, ""),
-                    new GeneratedExercise("T-Bar Rudern",                       4,  8, 40.0, 120, 7, ""),
-                    new GeneratedExercise("Latzug weit Griff",                  3, 10, 50.0,  90, 7, ""),
-                    new GeneratedExercise("Rear Delt Maschine",                 3, 15,  0.0,  60, 6, ""),
-                    new GeneratedExercise("Bizeps-Curl mit Langhantel",         3, 10, 22.0,  60, 7, ""),
-                    new GeneratedExercise("Reverse Curls",                      3, 12, 10.0,  60, 6, "")
+                    new GeneratedExercise("Langhantelrudern",                    5,  6, 55.0, 150, 8, ""),
+                    new GeneratedExercise("T-Bar Rudern",                        4,  8, 40.0, 120, 7, ""),
+                    new GeneratedExercise("Latzug weit Griff",                   3, 10, 50.0,  90, 7, ""),
+                    new GeneratedExercise("Rear Delt Maschine",                  3, 15,  0.0,  60, 6, ""),
+                    new GeneratedExercise("Bizeps-Curl mit Langhantel",          3, 10, 22.0,  60, 7, ""),
+                    new GeneratedExercise("Reverse Curls",                       3, 12, 10.0,  60, 6, "")
+            ));
+            case 3 -> new GeneratedDay("Tag B – Pull", "Vertikale Stärke", List.of(
+                    new GeneratedExercise("Klimmzüge (weit Griff)",              4,  7,  0.0, 120, 7, ""),
+                    new GeneratedExercise("Chest Supported Row",                 4,  8, 40.0, 120, 7, ""),
+                    new GeneratedExercise("Straight-Arm Pulldown",               3, 12, 22.0,  90, 6, ""),
+                    new GeneratedExercise("Face Pulls am Kabelzug",              3, 15, 18.0,  60, 6, ""),
+                    new GeneratedExercise("Incline Dumbbell Curl",               3, 10, 12.0,  60, 7, ""),
+                    new GeneratedExercise("Zottman Curl",                        3, 12,  8.0,  60, 6, "")
             ));
             default -> new GeneratedDay("Tag B – Pull", "Rücken, Bizeps", List.of(
-                    new GeneratedExercise("Klimmzüge",                          4,  6,  0.0, 120, 7, ""),
-                    new GeneratedExercise("Pendlay Rudern",                     4,  8, 50.0, 120, 7, ""),
-                    new GeneratedExercise("Seilzug-Rudern sitzend",             3, 10, 45.0,  90, 7, ""),
-                    new GeneratedExercise("W-Raises",                           3, 15,  5.0,  60, 6, ""),
-                    new GeneratedExercise("Preacher Curl",                      3, 10, 20.0,  90, 7, ""),
-                    new GeneratedExercise("Zottman Curl",                       3, 12,  8.0,  60, 6, "")
+                    new GeneratedExercise("Klimmzüge",                           4,  6,  0.0, 120, 7, ""),
+                    new GeneratedExercise("Pendlay Rudern",                      4,  8, 50.0, 120, 7, ""),
+                    new GeneratedExercise("Seilzug-Rudern sitzend",              3, 10, 45.0,  90, 7, ""),
+                    new GeneratedExercise("W-Raises",                            3, 15,  5.0,  60, 6, ""),
+                    new GeneratedExercise("Preacher Curl",                       3, 10, 20.0,  90, 7, ""),
+                    new GeneratedExercise("Zottman Curl",                        3, 12,  8.0,  60, 6, "")
             ));
         };
 
@@ -2006,99 +2078,129 @@ public class AiService {
     // ── Fallback-Tage: Experte (je 7 Übungen, 3 Varianten) ───────────────────
 
     private List<GeneratedDay> buildAdvancedDays(int variant) {
+
+        // ── Bein-Tage (4 Varianten statt 3) ──────────────────────────────────
         GeneratedDay legs = switch (variant) {
-            case 1 -> new GeneratedDay("Tag C – Beine", "Hamstring & Kraft, explosiv", List.of(
-                    new GeneratedExercise("Depth Jumps",                        4,  5,  0.0, 120, 9, ""),
-                    new GeneratedExercise("Rumänisches Kreuzheben",             5,  5, 95.0, 180, 8, ""),
-                    new GeneratedExercise("Nordische Hamstring Curls",          3,  6,  0.0, 120, 9, ""),
-                    new GeneratedExercise("Bulgarische Split Kniebeuge",        3,  8, 32.0, 120, 7, ""),
-                    new GeneratedExercise("Hip Thrust mit Langhantel",          4, 10, 80.0,  90, 7, ""),
-                    new GeneratedExercise("Beinpresse enge Fußstellung",        3, 10, 110.0, 90, 7, ""),
-                    new GeneratedExercise("Einbeiniges Wadenheben",             4, 12,  0.0,  60, 7, "")
+            case 0 -> new GeneratedDay("Tag C – Beine", "Quad-Hypertrophie & Power", List.of(
+                    new GeneratedExercise("Box Jumps",                               4,  5,   0.0, 120, 9, ""),
+                    new GeneratedExercise("Pause Kniebeuge (3s unten)",              5,  4, 100.0, 180, 8, ""),
+                    new GeneratedExercise("Beinpresse weite Fußstellung",            4,  8, 140.0, 120, 7, ""),
+                    new GeneratedExercise("Bulgarische Split Kniebeuge",             3,  8,  28.0, 120, 8, ""),
+                    new GeneratedExercise("Beinstrecker an der Maschine",            3, 12,   0.0,  90, 7, ""),
+                    new GeneratedExercise("Isometrisches Wandsitzen (60s)",          3, 60,   0.0,  60, 7, ""),
+                    new GeneratedExercise("Einbeiniges Wadenheben",                  4, 12,   0.0,  60, 7, "")
             ));
-            case 2 -> new GeneratedDay("Tag C – Beine", "Athletik & Power", List.of(
-                    new GeneratedExercise("Power Clean",                        4,  4, 60.0, 150, 9, ""),
-                    new GeneratedExercise("Front Squat mit Langhantel",         4,  6, 80.0, 150, 8, ""),
-                    new GeneratedExercise("Beinpresse",                         3,  8, 130.0,120, 7, ""),
-                    new GeneratedExercise("Step-ups auf Kasten",                3, 10, 24.0,  90, 7, ""),
-                    new GeneratedExercise("Sumo Kreuzheben",                    3,  6, 100.0,150, 8, ""),
-                    new GeneratedExercise("Beinbeuger sitzend",                 3, 10, 45.0,  90, 7, ""),
-                    new GeneratedExercise("Wadenheben an der Maschine",         4, 15, 70.0,  60, 7, "")
+            case 1 -> new GeneratedDay("Tag C – Beine", "Posterior Chain & Athletik", List.of(
+                    new GeneratedExercise("Depth Jumps",                             4,  5,   0.0, 120, 9, ""),
+                    new GeneratedExercise("Rumänisches Kreuzheben (Tempo 3-1-1)",    5,  5,  95.0, 180, 8, ""),
+                    new GeneratedExercise("Nordische Hamstring Curls",               4,  5,   0.0, 120, 9, ""),
+                    new GeneratedExercise("Hip Thrust mit Langhantel (Pause oben)",  4,  8,  90.0, 120, 8, ""),
+                    new GeneratedExercise("Single-Leg RDL mit Kurzhantel",           3,  8,  20.0, 120, 7, ""),
+                    new GeneratedExercise("Beinbeuger liegend (exzentrisch 5s)",     3,  8,  40.0,  90, 8, ""),
+                    new GeneratedExercise("Donkey Calf Raises",                      4, 15,   0.0,  60, 7, "")
             ));
-            default -> new GeneratedDay("Tag C – Beine", "Quad-Fokus & Kraft, explosiv", List.of(
-                    new GeneratedExercise("Box Jumps",                          4,  5,  0.0, 120, 9, ""),
-                    new GeneratedExercise("Kniebeuge mit Langhantel",           5,  5, 100.0,180, 8, ""),
-                    new GeneratedExercise("Hackenschmidt-Kniebeuge",            3,  8, 70.0, 120, 7, ""),
-                    new GeneratedExercise("Ausfallschritte laufend",            3, 10, 22.0,  90, 7, ""),
-                    new GeneratedExercise("Single-Leg RDL",                     3,  8, 24.0, 120, 7, ""),
-                    new GeneratedExercise("Beinbeuger an der Maschine",         3, 10, 45.0,  90, 7, ""),
-                    new GeneratedExercise("Donkey Calf Raises",                 4, 15,  0.0,  60, 7, "")
+            case 2 -> new GeneratedDay("Tag C – Beine", "Athletik & Power Clean", List.of(
+                    new GeneratedExercise("Power Clean",                             4,  4,  60.0, 150, 9, ""),
+                    new GeneratedExercise("Front Squat mit Langhantel",              4,  5,  80.0, 150, 8, ""),
+                    new GeneratedExercise("Step-ups auf Kasten (explosiv)",          4,  6,  24.0, 120, 8, ""),
+                    new GeneratedExercise("Sumo Kreuzheben",                         3,  6, 110.0, 150, 8, ""),
+                    new GeneratedExercise("Bulgarische Split Kniebeuge (Pause 2s)",  3,  8,  26.0, 120, 8, ""),
+                    new GeneratedExercise("Beinbeuger sitzend",                      3, 10,  45.0,  90, 7, ""),
+                    new GeneratedExercise("Wadenheben an der Maschine",              4, 15,  80.0,  60, 7, "")
+            ));
+            default -> new GeneratedDay("Tag C – Beine", "Unilateral & Explosiv", List.of(
+                    new GeneratedExercise("Kettlebell Swing",                        5,  8,  32.0,  90, 8, ""),
+                    new GeneratedExercise("Kniebeuge mit Langhantel (Tempo 3-0-1)",  4,  6, 100.0, 150, 8, ""),
+                    new GeneratedExercise("Einbeinige Beinpresse",                   3, 10,  80.0, 120, 7, ""),
+                    new GeneratedExercise("Hackenschmidt-Kniebeuge",                 3,  8,  80.0, 120, 7, ""),
+                    new GeneratedExercise("Ausfallschritte laufend (langsam, 3s)",   3, 10,  24.0,  90, 7, ""),
+                    new GeneratedExercise("Nordische Hamstring Curls",               3,  5,   0.0, 120, 9, ""),
+                    new GeneratedExercise("Wadenheben mit Pause (3s unten)",         4, 12,   0.0,  60, 7, "")
             ));
         };
 
+        // ── Push-Tage (4 Varianten) ───────────────────────────────────────────
         GeneratedDay push = switch (variant) {
-            case 1 -> new GeneratedDay("Tag A – Push", "Schulter-Fokus, Hypertrophie", List.of(
-                    new GeneratedExercise("Push Press",                         5,  6, 60.0, 150, 8, ""),
-                    new GeneratedExercise("Schrägbankdrücken mit Langhantel",   4,  8, 70.0, 120, 7, ""),
-                    new GeneratedExercise("Seitheben mit Kurzhanteln",          4, 12, 12.0,  60, 7, ""),
-                    new GeneratedExercise("Vorgebeugtes Seitheben",             4, 12,  8.0,  60, 7, ""),
-                    new GeneratedExercise("Arnold Press",                       3, 10, 22.0,  90, 7, ""),
-                    new GeneratedExercise("Trizeps Dips mit Zusatzgewicht",     3, 10, 20.0, 120, 7, ""),
-                    new GeneratedExercise("Schädelbrechter mit Langhantel",     3, 10, 25.0,  90, 7, "")
+            case 0 -> new GeneratedDay("Tag A – Push", "Brust Kraft + Schulter", List.of(
+                    new GeneratedExercise("Bankdrücken mit Langhantel (Tempo 2-1-1)", 5,  4,  92.0, 180, 8, ""),
+                    new GeneratedExercise("Nahgriff Bankdrücken (eng)",               4,  6,  70.0, 150, 8, ""),
+                    new GeneratedExercise("Schrägbankdrücken mit Kurzhanteln",        3,  8,  32.0, 120, 7, ""),
+                    new GeneratedExercise("Schulterdrücken mit Langhantel",           4,  6,  60.0, 150, 8, ""),
+                    new GeneratedExercise("Seitheben am Kabelzug (Pause oben)",       4, 12,  12.0,  60, 7, ""),
+                    new GeneratedExercise("Trizeps Dips mit Zusatzgewicht",           3, 10,  20.0, 120, 7, ""),
+                    new GeneratedExercise("JM Press",                                 3,  8,  35.0, 120, 7, "")
             ));
-            case 2 -> new GeneratedDay("Tag A – Push", "Brust-Fokus, Kraft-Ausdauer", List.of(
-                    new GeneratedExercise("Guillotine Press",                   4,  8, 70.0, 120, 8, ""),
-                    new GeneratedExercise("Bankdrücken mit Kurzhanteln",        4, 10, 36.0,  90, 7, ""),
-                    new GeneratedExercise("Low-to-High Kabelzug",               3, 15, 15.0,  60, 7, ""),
-                    new GeneratedExercise("Dips",                               4, 12,  0.0,  90, 7, ""),
-                    new GeneratedExercise("Z-Press sitzend",                    3,  8, 40.0, 120, 8, ""),
-                    new GeneratedExercise("Seitheben am Kabelzug",              3, 15, 12.0,  60, 6, ""),
-                    new GeneratedExercise("Overhead Trizeps Extension KH",     3, 12, 18.0,  90, 7, "")
+            case 1 -> new GeneratedDay("Tag A – Push", "Schulter-Fokus & Kontrolle", List.of(
+                    new GeneratedExercise("Push Press",                               5,  5,  65.0, 150, 8, ""),
+                    new GeneratedExercise("Schrägbankdrücken mit Langhantel",         4,  6,  70.0, 150, 8, ""),
+                    new GeneratedExercise("Seitheben mit Kurzhanteln (exzentrisch)",  4, 12,  10.0,  60, 7, ""),
+                    new GeneratedExercise("Vorgebeugtes Seitheben",                   4, 12,   8.0,  60, 7, ""),
+                    new GeneratedExercise("Arnold Press (langsam)",                   3,  8,  22.0, 120, 7, ""),
+                    new GeneratedExercise("Schädelbrechter mit Langhantel",           3,  8,  28.0, 120, 7, ""),
+                    new GeneratedExercise("Overhead Trizeps Extension KH",            3, 10,  18.0,  90, 7, "")
             ));
-            default -> new GeneratedDay("Tag A – Push", "Brust, Schulter, Trizeps – Kraft", List.of(
-                    new GeneratedExercise("Bankdrücken mit Langhantel",         5,  5,  90.0, 180, 8, ""),
-                    new GeneratedExercise("Schrägbankdrücken mit Kurzhanteln",  4,  8,  30.0, 120, 8, ""),
-                    new GeneratedExercise("Kurzhantel-Fliegenschlagen",         3, 10,  24.0,  90, 7, ""),
-                    new GeneratedExercise("Schulterdrücken mit Langhantel",     4,  6,  60.0, 150, 8, ""),
-                    new GeneratedExercise("Maschinen-Seitheben",                4, 12,   0.0,  60, 7, ""),
-                    new GeneratedExercise("JM Press",                           3,  8,  30.0, 120, 7, ""),
-                    new GeneratedExercise("Trizeps Pushdown am Kabelzug",       3, 15,  25.0,  60, 7, "")
+            case 2 -> new GeneratedDay("Tag A – Push", "Brust Hypertrophie", List.of(
+                    new GeneratedExercise("Bankdrücken weiter Griff (Pause unten)",   4,  6,  85.0, 150, 8, ""),
+                    new GeneratedExercise("Guillotine Press",                         4,  8,  68.0, 120, 7, ""),
+                    new GeneratedExercise("Low-to-High Kabelzug",                     3, 15,  15.0,  60, 7, ""),
+                    new GeneratedExercise("Dips (Gewicht + langsam exzentrisch)",     4, 10,  15.0, 120, 7, ""),
+                    new GeneratedExercise("Z-Press sitzend",                          3,  8,  42.0, 120, 8, ""),
+                    new GeneratedExercise("Maschinen-Seitheben",                      3, 15,   0.0,  60, 6, ""),
+                    new GeneratedExercise("Trizeps Pushdown am Kabelzug",             3, 15,  28.0,  60, 7, "")
+            ));
+            default -> new GeneratedDay("Tag A – Push", "Kraft & Kontrolle", List.of(
+                    new GeneratedExercise("Bankdrücken mit Langhantel (5×5)",         5,  5,  90.0, 180, 8, ""),
+                    new GeneratedExercise("Schrägbankdrücken mit Kurzhanteln",        4,  8,  30.0, 120, 8, ""),
+                    new GeneratedExercise("Pec Deck Maschine",                        3, 12,   0.0,  90, 7, ""),
+                    new GeneratedExercise("Schulterdrücken mit Kurzhanteln (sitzend)",4,  8,  24.0, 120, 8, ""),
+                    new GeneratedExercise("Seitheben am Kabelzug",                    4, 15,  12.0,  60, 7, ""),
+                    new GeneratedExercise("Nahgriff Bankdrücken",                     3,  8,  70.0, 120, 7, ""),
+                    new GeneratedExercise("Kickbacks mit Kurzhantel",                 3, 12,  10.0,  60, 6, "")
             ));
         };
 
+        // ── Pull-Tage (4 Varianten) ───────────────────────────────────────────
         GeneratedDay pull = switch (variant) {
-            case 1 -> new GeneratedDay("Tag B – Pull", "Rücken-Breite, Hypertrophie", List.of(
-                    new GeneratedExercise("Klimmzüge mit Zusatzgewicht",        5,  6, 20.0, 150, 8, ""),
-                    new GeneratedExercise("Latzug eng Griff",                   4, 10, 60.0,  90, 7, ""),
-                    new GeneratedExercise("Chest Supported Row",                4, 10, 50.0,  90, 7, ""),
-                    new GeneratedExercise("Meadows Row",                        3,  8, 36.0,  90, 7, ""),
-                    new GeneratedExercise("Face Pulls am Kabelzug",             3, 15, 22.0,  60, 6, ""),
-                    new GeneratedExercise("Incline Dumbbell Curl",              4, 10, 14.0,  60, 7, ""),
-                    new GeneratedExercise("Reverse Curls",                      3, 12, 12.0,  60, 6, "")
+            case 0 -> new GeneratedDay("Tag B – Pull", "Rücken Kraft + Klimmzüge", List.of(
+                    new GeneratedExercise("Klimmzüge mit Zusatzgewicht",              5,  5,  20.0, 150, 8, ""),
+                    new GeneratedExercise("Langhantelrudern (Pause oben 1s)",         4,  6,  80.0, 150, 8, ""),
+                    new GeneratedExercise("Latzug eng Griff (Tempo 3-1-1)",          3, 10,  65.0,  90, 7, ""),
+                    new GeneratedExercise("Chest Supported Row",                      4,  8,  50.0, 120, 7, ""),
+                    new GeneratedExercise("Face Pulls am Kabelzug",                   3, 15,  22.0,  60, 6, ""),
+                    new GeneratedExercise("Hammer Curls mit Kurzhanteln",             4, 10,  18.0,  60, 7, ""),
+                    new GeneratedExercise("Incline Dumbbell Curl",                    3, 10,  14.0,  60, 7, "")
             ));
-            case 2 -> new GeneratedDay("Tag B – Pull", "Rücken-Dicke, Athletik", List.of(
-                    new GeneratedExercise("Kreuzheben",                         5,  3, 130.0, 180, 9, ""),
-                    new GeneratedExercise("Pendlay Rudern",                     4,  6,  60.0, 120, 8, ""),
-                    new GeneratedExercise("Ringklimmzüge",                      4,  8,   0.0, 120, 8, ""),
-                    new GeneratedExercise("Kabelzug-Rudern weit",               3, 12,  40.0,  90, 7, ""),
-                    new GeneratedExercise("W-Raises",                           3, 15,   6.0,  60, 6, ""),
-                    new GeneratedExercise("Zottman Curl",                       4,  8,  16.0,  90, 7, ""),
-                    new GeneratedExercise("Kabelzug-Curl",                      3, 12,  20.0,  60, 6, "")
+            case 1 -> new GeneratedDay("Tag B – Pull", "Rücken-Dicke & Athletik", List.of(
+                    new GeneratedExercise("Kreuzheben (Kraft, kein Bein-Fokus)",      5,  3, 130.0, 180, 9, ""),
+                    new GeneratedExercise("Pendlay Rudern",                           4,  5,  70.0, 150, 8, ""),
+                    new GeneratedExercise("Ringklimmzüge (Tempo 3-0-1)",              4,  6,   0.0, 120, 8, ""),
+                    new GeneratedExercise("Meadows Row",                              3,  8,  36.0, 120, 7, ""),
+                    new GeneratedExercise("Rear Delt Maschine",                       3, 15,   0.0,  60, 6, ""),
+                    new GeneratedExercise("Zottman Curl (langsam exzentrisch)",       4,  8,  16.0,  90, 7, ""),
+                    new GeneratedExercise("Reverse Curls",                            3, 12,  14.0,  60, 6, "")
             ));
-            default -> new GeneratedDay("Tag B – Pull", "Rücken, Bizeps – Kraft", List.of(
-                    new GeneratedExercise("Kreuzheben",                         5,  5, 120.0, 180, 9, ""),
-                    new GeneratedExercise("Klimmzüge mit Zusatzgewicht",        4,  6,  15.0, 150, 8, ""),
-                    new GeneratedExercise("T-Bar Rudern",                       4,  6,  50.0, 150, 8, ""),
-                    new GeneratedExercise("Seal Row",                           3,  8,  40.0,  90, 7, ""),
-                    new GeneratedExercise("Band Pull-Aparts",                   3, 20,   0.0,  60, 6, ""),
-                    new GeneratedExercise("Bizeps-Curl mit Langhantel",         4,  8,  30.0,  90, 7, ""),
-                    new GeneratedExercise("Spider Curls",                       3, 12,  10.0,  60, 6, "")
+            case 2 -> new GeneratedDay("Tag B – Pull", "Vertikale & Horizontale Kraft", List.of(
+                    new GeneratedExercise("Klimmzüge mit Zusatzgewicht (weiter Griff)",5, 4,  22.0, 150, 8, ""),
+                    new GeneratedExercise("T-Bar Rudern",                              4,  6,  55.0, 150, 8, ""),
+                    new GeneratedExercise("Seal Row (exzentrisch 4s)",                 3,  8,  44.0, 120, 7, ""),
+                    new GeneratedExercise("Straight-Arm Pulldown",                     3, 12,  25.0,  90, 7, ""),
+                    new GeneratedExercise("Band Pull-Aparts",                          3, 20,   0.0,  60, 6, ""),
+                    new GeneratedExercise("Bizeps-Curl mit Langhantel",                4,  8,  32.0,  90, 7, ""),
+                    new GeneratedExercise("Spider Curls",                              3, 12,  12.0,  60, 6, "")
+            ));
+            default -> new GeneratedDay("Tag B – Pull", "Rücken Hypertrophie", List.of(
+                    new GeneratedExercise("Klimmzüge mit Zusatzgewicht (Untergriff)",  5,  5,  15.0, 150, 8, ""),
+                    new GeneratedExercise("Seilzug-Rudern sitzend (Pause vorne 2s)",   4,  8,  60.0, 120, 7, ""),
+                    new GeneratedExercise("Einarmiges Kurzhantelrudern",                4,  8,  36.0, 120, 7, ""),
+                    new GeneratedExercise("Latzug weit Griff",                          3, 10,  65.0,  90, 7, ""),
+                    new GeneratedExercise("W-Raises",                                   3, 15,   6.0,  60, 6, ""),
+                    new GeneratedExercise("Preacher Curl",                              4,  8,  22.0,  90, 7, ""),
+                    new GeneratedExercise("Kabelzug-Curl (isometrisches Halten 3s)",    3, 10,  22.0,  60, 7, "")
             ));
         };
 
         return new ArrayList<>(List.of(push, pull, legs));
     }
-
     // =========================================================================
     // HTTP-Calls
     // =========================================================================
@@ -2127,7 +2229,7 @@ public class AiService {
         Map<String, Object> body = Map.of("model", aiConfig.getOllama().getModel(),
                 "prompt", fullPrompt, "stream", false, "format", "json",
                 // ── Temperature erhöht: 0.15 → 0.35 für mehr Variabilität ──
-                "options", Map.of("temperature", 0.35, "num_predict", 4000));
+                "options", Map.of("temperature", 0.35, "num_predict", 3000));
         try {
             return webClient.post().uri(url).header("Content-Type", "application/json").bodyValue(body)
                     .retrieve()
@@ -2135,7 +2237,7 @@ public class AiService {
                             .doOnNext(e -> log.warn("Ollama JSON HTTP-Fehler: {}", e)).flatMap(e -> Mono.empty()))
                     .bodyToMono(Map.class)
                     .map(m -> (m != null && m.get("response") != null) ? (String) m.get("response") : null)
-                    .timeout(Duration.ofSeconds(400))
+                    .timeout(Duration.ofSeconds(320))
                     .onErrorResume(e -> { log.warn("Ollama JSON: {}", e.getMessage()); return Mono.empty(); })
                     .block();
         } catch (Exception e) { log.error("Ollama JSON Fehler: {}", e.getMessage()); return null; }

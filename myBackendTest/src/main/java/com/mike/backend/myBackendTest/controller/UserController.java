@@ -3,6 +3,7 @@ package com.mike.backend.myBackendTest.controller;
 import com.mike.backend.myBackendTest.dto.UpdateProfileRequest;
 import com.mike.backend.myBackendTest.entity.AppUser;
 import com.mike.backend.myBackendTest.security.SecurityHelper;
+import com.mike.backend.myBackendTest.service.BodyScanService;
 import com.mike.backend.myBackendTest.service.PlanLimitService;
 import com.mike.backend.myBackendTest.service.UserService;
 import jakarta.validation.Valid;
@@ -16,23 +17,26 @@ import java.util.Map;
 @RequestMapping("/api/users")
 public class UserController {
 
-    private final UserService userService;
-    private final SecurityHelper securityHelper;
+    private final UserService      userService;
+    private final SecurityHelper   securityHelper;
     private final PlanLimitService planLimitService;
+    private final BodyScanService  bodyScanService;
 
     public UserController(UserService userService,
                           SecurityHelper securityHelper,
-                          PlanLimitService planLimitService) {
+                          PlanLimitService planLimitService,
+                          BodyScanService bodyScanService) {
         this.userService      = userService;
         this.securityHelper   = securityHelper;
         this.planLimitService = planLimitService;
+        this.bodyScanService  = bodyScanService;
     }
 
     @GetMapping("/me")
     public ResponseEntity<Map<String, Object>> getMyProfile() {
         Long userId = securityHelper.getCurrentUserId();
         AppUser user = userService.getUser(userId);
-        return ResponseEntity.ok(buildProfileResponse(user));
+        return ResponseEntity.ok(buildProfileResponse(user, userId));
     }
 
     @PutMapping("/me")
@@ -40,7 +44,7 @@ public class UserController {
             @Valid @RequestBody UpdateProfileRequest request) {
         Long userId = securityHelper.getCurrentUserId();
         AppUser user = userService.updateProfile(userId, request);
-        return ResponseEntity.ok(buildProfileResponse(user));
+        return ResponseEntity.ok(buildProfileResponse(user, userId));
     }
 
     @PutMapping("/me/password")
@@ -61,14 +65,12 @@ public class UserController {
         return ResponseEntity.ok(Map.of("message", "Passwort erfolgreich geändert"));
     }
 
-    // ── NEU: Plan-Limit Info ────────────────────────────────────
     @GetMapping("/me/plan-limit")
     public ResponseEntity<Map<String, Object>> getMyPlanLimit() {
         Long userId = securityHelper.getCurrentUserId();
         AppUser user = userService.getUser(userId);
         return ResponseEntity.ok(planLimitService.getLimitInfo(user));
     }
-    // ────────────────────────────────────────────────────────────
 
     @DeleteMapping("/me")
     public ResponseEntity<Void> deleteMyAccount() {
@@ -77,19 +79,22 @@ public class UserController {
         return ResponseEntity.noContent().build();
     }
 
-    private Map<String, Object> buildProfileResponse(AppUser user) {
+    private Map<String, Object> buildProfileResponse(AppUser user, Long userId) {
         Map<String, Object> map = new LinkedHashMap<>();
-        map.put("id",                  user.getId());
-        map.put("username",            user.getUsername());
-        map.put("email",               user.getEmail());
-        map.put("role",                user.getRole().name());
-        map.put("fitnessLevel",        user.getFitnessLevel() != null
+        map.put("id",                       user.getId());
+        map.put("username",                 user.getUsername());
+        map.put("email",                    user.getEmail());
+        map.put("role",                     user.getRole().name());
+        map.put("fitnessLevel",             user.getFitnessLevel() != null
                 ? user.getFitnessLevel().name() : "BEGINNER");
-        map.put("age",                 user.getAge()      != null ? user.getAge()      : 0);
-        map.put("weightKg",            user.getWeightKg() != null ? user.getWeightKg() : 0.0);
-        map.put("heightCm",            user.getHeightCm() != null ? user.getHeightCm() : 0.0);
-        map.put("createdAt",           user.getCreatedAt().toString());
-        map.put("motivationalMessage", user.getMotivationalMessage());
+        map.put("age",                      user.getAge()      != null ? user.getAge()      : 0);
+        map.put("weightKg",                 user.getWeightKg() != null ? user.getWeightKg() : 0.0);
+        map.put("heightCm",                 user.getHeightCm() != null ? user.getHeightCm() : 0.0);
+        map.put("createdAt",                user.getCreatedAt().toString());
+        map.put("motivationalMessage",      user.getMotivationalMessage());
+        map.put("showBodyScanInDashboard",  user.isShowBodyScanInDashboard());
+        // Zeigt dem Frontend sofort, ob Daten vorhanden sind (kein Extra-Request nötig)
+        map.put("hasBodyScanData",          bodyScanService.hasEntries(userId));
         return map;
     }
 }

@@ -4,8 +4,8 @@ import jakarta.validation.constraints.*;
 import java.util.List;
 
 /**
- * DTO für Trainings-Feedback vom Frontend.
- * Das ist das zentrale Objekt: Benutzer meldet, wie anstrengend die Einheit war.
+ * DTO für Trainings-Feedback vom Frontend
+ * zentrale Objekt: Benutzer meldet wie anstrengend die Einheit war
  */
 public record SessionFeedbackRequest(
 
